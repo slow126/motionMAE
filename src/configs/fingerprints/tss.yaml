@@ -1,0 +1,28 @@
+# TSS (Transferring Semantic Segmentation) Dataset Configuration for Fingerprinting
+# Note: TSS is a benchmark dataset with no train/val splits - it's just a root directory
+
+dataset_name: tss
+dataset_type: real
+
+# Dataset paths (override via command line or environment)
+paths:
+  root: /home/spencer/Data/correspondence/TSS_CVPR2016  # Root directory of TSS dataset (no splits)
+
+# Dataset initialization parameters
+dataset_params:
+  # Note: TSS has no split - it's a benchmark dataset
+  size: 512  # Image size
+  feature_size: 32  # Feature size for downsampled flow
+  max_pts: 40  # Maximum number of keypoints
+  thres: img  # PCK threshold type ('img' or 'bbox')
+  augmentation: false  # No augmentation for fingerprinting
+  sample_keypoints: true  # Whether to sample keypoints from valid flow regions
+
+# Processing options (can override defaults from fingerprint_config.yaml)
+processing:
+  max_samples: null  # null = process all samples
+  use_dataloader: false
+  batch_size: 1
+  num_workers: 0
+  track_temporal: false  # Real datasets are typically single-frame pairs
+

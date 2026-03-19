@@ -1,0 +1,27 @@
+# Online Synthetic Correspondence Dataset Configuration for Fingerprinting
+
+dataset_name: synthetic
+dataset_type: synthetic
+
+# Dataset paths (override via command line or environment)
+paths:
+  # Paths to geometry and processor config files
+  geometry_config_path: src/configs/online_synth_configs/OnlineGeometryConfig.yaml
+  processor_config_path: src/configs/online_synth_configs/OnlineProcessorConfig.yaml
+  # For validation split, use OnlineGeometryConfig_Val.yaml
+  geometry_config_val_path: src/configs/online_synth_configs/OnlineGeometryConfig_Val.yaml
+
+# Dataset initialization parameters
+dataset_params:
+  split: train  # train, val
+  opengl_device_index: null  # null = auto-detect from torch.cuda.current_device()
+  # Note: For 'val' split, geometry_config_path will automatically use geometry_config_val_path
+
+# Processing options (can override defaults from fingerprint_config.yaml)
+processing:
+  max_samples: null  # null = process all samples
+  use_dataloader: true  # Required for synthetic datasets (uses custom collate_fn with CUDA kernels)
+  batch_size: 1  # Can increase for faster processing
+  num_workers: 0  # Must be 0 for synthetic dataset (GPU-bound rendering, multiprocessing adds overhead)
+  track_temporal: false  # Synthetic datasets are typically single-frame pairs
+

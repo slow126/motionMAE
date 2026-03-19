@@ -1,0 +1,35 @@
+# PointOdyssey Dataset Configuration for Fingerprinting
+
+dataset_name: pointodyssey
+dataset_type: pointodyssey
+
+# Dataset paths (override via command line or environment)
+paths:
+  root: /home/spencer/Data/PointOdyssey  # Path to PointOdyssey dataset
+
+# Dataset initialization parameters
+dataset_params:
+  dset: train  # train, val, test
+  use_augs: false
+  S: 8  # Number of frames per sequence
+  N: 32  # Number of points to track
+  strides: [4]  # Frame strides for sampling
+  quick: false
+  verbose: false
+  resize_size: [576, 576]  # resize_size (size + 64)
+  crop_size: [512, 512]  # Final crop size
+  filter_instances: true
+  downsample_for_cats: true
+  cats_feat_size: 32  # Feature size for downsampled flow
+  all_points: true
+  max_pts: 40
+  normalize: true
+
+# Processing options (can override defaults from fingerprint_config.yaml)
+processing:
+  max_samples: null  # null = process all samples
+  use_dataloader: false
+  batch_size: 1
+  num_workers: 0
+  track_temporal: true
+

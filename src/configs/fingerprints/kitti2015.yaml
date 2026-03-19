@@ -1,0 +1,31 @@
+# KITTI 2015 Dataset Configuration for Fingerprinting
+
+dataset_name: kitti2015
+dataset_type: real
+
+# Dataset paths (override via command line or environment)
+paths:
+  root: /home/spencer/Data/correspondence/kitti/kitti-2015/  # Root directory containing kitti-2015 folder
+  # Alternative: specify kitti_root and root will be constructed as kitti_root/kitti-2015
+  # kitti_root: /home/spencer/Data/correspondence/kitti
+
+# Dataset initialization parameters
+dataset_params:
+  split: val  # 'train', 'val', or 'training' (use 'training' if kitti_val_use_full_training is True)
+  size: 512  # Image size (can be int or [H, W])
+  feature_size: 32  # Feature size for downsampled flow
+  max_pts: 200  # Maximum number of keypoints
+  thres: img  # PCK threshold type ('img' or 'bbox')
+  occ_type: occ  # Flow type: 'occ', 'noc', or 'only_occ'
+  normalize: true  # Apply ImageNet normalization
+  normalize_images: true  # Use validation format with keypoints
+  kitti_val_use_full_training: true  # If True and split='val', uses full training set
+
+# Processing options (can override defaults from fingerprint_config.yaml)
+processing:
+  max_samples: null  # null = process all samples
+  use_dataloader: false
+  batch_size: 1
+  num_workers: 0
+  track_temporal: false  # Real datasets are typically single-frame pairs
+

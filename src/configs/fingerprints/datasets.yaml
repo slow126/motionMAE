@@ -1,0 +1,36 @@
+# Master configuration file listing all available datasets
+# This file can be used to specify which datasets to process
+
+# List of datasets to process (when using --dataset all)
+available_datasets:
+  - synthetic
+  - flyingthings
+  - pointodyssey
+  - spair
+  - pfpascal
+  - pfwillow
+  - tss
+  - kitti2012
+  - kitti2015
+
+# Default paths (can be overridden via command line or environment variables)
+default_paths:
+  flyingthings_root: /home/spencer/Data/FlyingThings3D_tiny/
+  pointodyssey_root: /home/spencer/Data/point_odyssey_v1.2
+  datapath: ./models/Datasets_CATs
+
+# Default processing options for all datasets
+default_processing:
+  max_samples: null  # null = process all samples
+  use_dataloader: false
+  batch_size: 1
+  num_workers: 0
+  track_temporal: true
+  progress: true
+
+# Default output options
+default_output:
+  generate_plots: true
+  generate_comparison: true
+  output_dir: ./fingerprints
+

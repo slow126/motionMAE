@@ -1,0 +1,52 @@
+# Flow Fingerprint Configuration
+# Default configuration for flow fingerprint computation
+
+fingerprint_config:
+  # Magnitude (log-spaced) histogram
+  mag_min: 1e-3
+  mag_max: 256.0
+  mag_bins: 40
+
+  # Angle histogram (in radians)
+  ang_bins: 36
+  ang_weight_clip: 5.0
+
+  # Joint histogram (magnitude x angle)
+  joint_mag_bins: 24
+  joint_ang_bins: 36
+
+  # Temporal delta histogram
+  delta_min: 1e-3
+  delta_max: 256.0
+  delta_bins: 30
+
+  # Divergence / curl histograms
+  div_bins: 30
+  div_min: -2.0
+  div_max: 2.0
+  curl_bins: 30
+  curl_min: -2.0
+  curl_max: 2.0
+
+  # Spatial maps
+  spatial_downsample_hw: [32, 32]
+  motion_thresh: 0.1  # px
+
+  # General
+  accumulate_density: true
+  keep_counts: false
+
+# Processing options
+processing:
+  max_samples: null  # null = process all samples
+  use_dataloader: false
+  batch_size: 1
+  num_workers: 0
+  track_temporal: true
+  progress: true
+
+# Output options
+output:
+  generate_plots: true
+  generate_comparison: true
+

@@ -1,0 +1,93 @@
+# Smoke test: PointOdyssey random subset 50% (first 3 clips)
+# Run: python train_lightning.py --config src/configs/CorrespondenceConfigs/pointodyssey_smoke_random_50_rc.yaml
+
+model:
+  backbone: 'resnet101'
+  freeze: true
+  pretrained_backbone: true
+
+training:
+  epochs: 2
+  batch_size: 8
+  n_threads: 0
+  pointodyssey_train_workers: 8
+  cpu_threads: 4
+  check_val_every_n_epoch: 1
+  val_check_interval: 1.0
+  seed: 2021
+  lr: 6e-4
+  lr_backbone: 6e-6
+  weight_decay: 0.05
+  momentum: 0.9
+  scheduler: 'step'
+  step: '[70, 80, 90]'
+  step_gamma: 0.5
+  max_steps: null
+  steps_per_epoch: null
+  validation_step_marks: []
+  validation_step_interval: 50000
+  augmentation: false
+  min_flow_length: null
+  max_flow_length: null
+  mmd_every_n_epochs: 0
+
+  enable_debug: false
+  debug_visualization_benchmarks: pointodyssey
+  debug_visualization_persist: false
+  eval_initial: true
+
+dataset:
+  dataset_name: 'pointodyssey_pairs'
+  split: 'train'
+  size: [512, 512]
+  downsample_flow: 32
+  max_kps: null
+  dense_kps_use_all: true
+  verbose: false
+  debug: false
+  normalize_images: true
+
+  # PointOdyssey pair-manifest smoke settings
+  pointodyssey_pairs_manifest_path: 'analysis/pointodyssey_pairs_smoke/manifest.jsonl'
+  pointodyssey_pairs_root: '/home/slow1/Data/PointOdyssey'
+  pointodyssey_pairs_subset_mode: 'random'
+  pointodyssey_pairs_subset_indices_path: 'analysis/pointodyssey_pairs_smoke/subset_random_50_seed2021.json'
+  pointodyssey_pairs_seed: 2021
+  reverse_flow: true
+
+evaluation:
+  eval_benchmarks: ['kitti2012', 'kitti2015', 'pfpascal', 'pfwillow', 'tss']
+  eval_alphas: [0.01, 0.01, 0.1, 0.1, 0.05]
+  thres: 'img'
+  split_to_use_for_validation: 'val'
+  val_batch_size: 4
+  val_num_workers: 2
+  prefetch_factor: 2
+
+  use_motion_aware: false
+  min_motion_pixels: 5.0
+  zero_threshold: 0.5
+
+  datapath: './models/Datasets_CATs'
+  tss_root: '/home/slow1/Data/correspondence/TSS_CVPR2016'
+  kitti_root: '/home/slow1/Data/correspondence/kitti'
+  kitti_val_use_full_training: true
+  pointodyssey_root: '/home/slow1/Data/PointOdyssey'
+  flyingthings_root: '/home/slow1/Data/FlyingThings3D_Pytorch'
+
+  val_datasets:
+    kitti2012:
+      split: 'val'
+      normalize_images: true
+    kitti2015:
+      split: 'val'
+      normalize_images: true
+    pfpascal:
+      split: 'val'
+    pfwillow:
+      split: 'test'
+
+paths:
+  snapshots: './snapshots'
+  pretrained: null
+  start_epoch: 0

@@ -1,0 +1,25 @@
+# Vector Coverage Configuration
+# Default configuration for flow vector representation and coverage analysis
+
+vector_config:
+  # Subsampling options
+  subsample_strategy: 'all'  # 'all', 'cell_centers', 'random', 'sparse'
+  cell_size: null  # [h_cell, w_cell] for cell_centers strategy, null for default
+  random_fraction: 0.1  # Fraction to keep for random subsampling
+  max_vectors_per_frame: null  # Max vectors per frame (for sparse), null for unlimited
+  
+  # Normalization
+  normalize_flow_by: 'p95'  # 'std', 'p95', 'p99', 'max'
+  normalize_flow: 'global'  # 'global', 'local', 'none'
+  # 'global': Compute stats from all datasets, use for all (recommended for comparison)
+  # 'local': Compute stats per dataset independently
+  # 'none': Don't normalize (preserve raw scale), but still compute stats for reference
+  
+  # Storage
+  max_vectors_total: null  # Limit total vectors across all datasets, null for unlimited
+  save_vectors: true  # Whether to save raw vectors
+  save_stats: true  # Whether to save statistics
+  
+  # Reproducibility
+  random_seed: 42
+

@@ -1,0 +1,41 @@
+# Vector Analysis Configuration
+# Unified configuration for generating vectors and running comparisons
+
+# Experiment and machine configs
+experiment_configs:
+  - 'slurm/experiment_configs/fingerprints.yaml'
+  # Add more config paths as needed
+
+machine_config: 'slurm/machine_configs/local.yaml'
+
+# Vector generation config
+vector_config: null  # null = use default: src/configs/fingerprints/vector_config.yaml
+
+# Processing options
+processing:
+  max_samples: 100  # null = process all samples
+  train_sample_fraction: 0.1  # Fraction of training frames to sample (for large datasets)
+  generate_vectors: false  # Set to false to skip generation and use existing vectors
+
+# Output directories
+output:
+  vector_dir: './vector_coverage'  # Directory for vector JSON files
+  comparison_dir: './vector_comparisons'  # Directory for comparison results
+
+# Comparison options
+comparison:
+  # MMD options
+  mmd_sigma: 1.0  # RBF kernel bandwidth
+  mmd_use_multiple_bandwidths: true  # Use multiple bandwidths and sum
+  mmd_max_vectors: 10000  # Maximum vectors to use for MMD (subsample if needed). null = use all.
+  
+  # K-means options
+  kmeans_n_clusters: 50  # Number of clusters for K-means comparison
+  
+  # Which comparisons to run
+  compare_train_to_eval: true  # Compare each training dataset to its eval benchmarks
+  compare_all_pairs: false  # Compare all possible pairs (can be expensive)
+  
+  # Comparison naming
+  comparison_name_template: '{train_name}_vs_{eval_name}'  # Template for comparison file names
+

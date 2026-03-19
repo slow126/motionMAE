@@ -1,0 +1,27 @@
+# FlyingThings3D Dataset Configuration for Fingerprinting
+
+dataset_name: flyingthings
+dataset_type: flyingthings
+
+# Dataset paths (override via command line or environment)
+paths:
+  root: /home/spencer/Data/FlyingThings3D_tiny/  # Path to FlyingThings3D dataset
+
+# Dataset initialization parameters
+dataset_params:
+  split: train  # train, val, test
+  size: 512  # Image size (width, height)
+  downsample_flow: 32  # Feature size for downsampled flow
+  subsample_flow: 0.01  # Fraction of flow to keep
+  use_valid_mask: true
+  reverse_flow: true
+  filter_out_of_bounds: true
+
+# Processing options (can override defaults from fingerprint_config.yaml)
+processing:
+  max_samples: null  # null = process all samples
+  use_dataloader: false
+  batch_size: 1
+  num_workers: 0
+  track_temporal: true
+

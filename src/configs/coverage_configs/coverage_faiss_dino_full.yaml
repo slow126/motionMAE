@@ -1,0 +1,392 @@
+representation: dino
+encoder: dino
+batch_size: 8
+num_workers: 4
+sampling:
+  max_vectors: 8000000  # 8M vectors: 1024 patches/image (32x32) * 8000 images
+  batch_limit: 1000  # Max batches per dataset (batch_size=8, so up to 8000 images)
+  dense_threshold: 8000
+  dense_fraction: 0.25
+  dense_min_keep: 4096
+  seed: 42
+pca:
+  enabled: true
+  output_dim: 256
+  fit_on: train
+  max_train_vectors: 100000
+  whiten: false
+faiss:
+  index_factory: IVF4096,Flat
+  metric: cosine
+  use_gpu: true
+  nprobe: 64
+coverage:
+  k: 5
+  neighbor_agg: median
+  self_radius_k: 5
+  radius_quantile: 0.99
+  kl_method: knn
+  kl_knn_k: 20
+  kl_bins: 50
+  kl_eps: 1.0e-6
+cache:
+  dir: /mnt/nvme_1tb_b/coverage_vectors
+  mode: read_write
+  format: npy
+  mmap: true
+  mix_from_cache: true
+  pairwise: true
+output:
+  results_file: coverage_faiss_dino_results_fast.csv
+dataset_params:
+  size:
+  - 512
+  - 512
+  downsample_flow: 32
+  max_kps: null
+  dense_kps_use_all: true
+  verbose: false
+  debug: false
+  normalize_images: false
+  kitti_val_use_full_training: true
+dataset_overrides:
+  sintel:
+    sintel_root: /home/spencer/Data
+    normalize_images: true
+  spair:
+    datapath: ./models/Datasets_CATs
+    normalize_images: false
+  pfpascal:
+    datapath: ./models/Datasets_CATs
+    normalize_images: false
+  pfwillow:
+    datapath: ./models/Datasets_CATs
+    normalize_images: false
+  synthetic:
+    geometry_config_path: src/configs/online_synth_configs/OnlineGeometryConfig.yaml
+    processor_config_path: src/configs/online_synth_configs/OnlineProcessorConfig.yaml
+    normalize_images: false
+    device: cuda
+  synthetic_2d_warp:
+    geometry_config_path: src/configs/online_synth_configs/OnlineGeometryConfig.yaml
+    processor_config_path: src/configs/online_synth_configs/OnlineProcessorConfig.yaml
+    normalize_images: false
+    synthetic_flow_warp: true
+    synthetic_flow_warp_swap: true
+    device: cuda
+  imagenet2dwarp:
+    datapath: hf://ILSVRC/imagenet-1k
+    hf_streaming: false
+    hf_max_samples: 5000
+    hf_cache_dir: /home/spencer/.cache/huggingface/datasets
+    normalize_images: true
+    rotation_range: [-30.0, 30.0]
+    scale_range: [0.5, 2.5]
+    translation_range: [-0.1, 0.1]
+    shear_range: [-0.2, 0.2]
+    cache_warp_params: true
+    cache_dir: ./cache/imagenet2dwarp
+    seed: 42
+  pointodyssey:
+    dataset_location: /home/spencer/Data/PointOdyssey
+    normalize_images: true
+    pointodyssey_sequence_length: 2
+    pointodyssey_num_pts_to_track: 32
+    use_all_valid: true
+  kitti2012:
+    datapath: /home/spencer/Data/correspondence/kitti
+    normalize_images: true
+  kitti2015:
+    datapath: /home/spencer/Data/correspondence/kitti
+    normalize_images: true
+  flyingthings:
+    datapath: /home/spencer/Data/FlyingThings3D_10k
+    normalize_images: true
+  tss:
+    datapath: /home/spencer/Data/correspondence/TSS_CVPR2016
+    normalize_images: true
+  middlebury:
+    datapath: /home/spencer/Data/middlebury/all
+    normalize_images: true
+datasets:
+# FlyingThings first for fast failure detection
+- name: flyingthings
+  split: train
+  representation: dino
+
+  is_eval: false
+  output: coresets/flyingthings_train_dino.pt
+- name: imagenet2dwarp
+  split: train
+  representation: dino
+
+  is_eval: false
+- name: spair_2d_warp_70_30
+  split: train
+
+  mixed: true
+  datasets:
+  - spair
+  - imagenet2dwarp
+  percentages:
+  - 0.7
+  - 0.3
+- name: spair_2d_warp_50_50
+  split: train
+
+  mixed: true
+  datasets:
+  - spair
+  - imagenet2dwarp
+  percentages:
+  - 0.5
+  - 0.5
+- name: spair_2d_warp_30_70
+  split: train
+
+  mixed: true
+  datasets:
+  - spair
+  - imagenet2dwarp
+  percentages:
+  - 0.3
+  - 0.7
+- name: synthetic
+  split: train
+  representation: dino
+
+  is_eval: false
+  output: coresets/synthetic_train_dino.pt
+- name: synthetic_2d_warp
+  split: train
+  representation: dino
+
+  is_eval: false
+  output: coresets/synthetic_2d_warp_train_dino.pt
+- name: synthetic_small_zoom
+  dataset_name: synthetic
+  split: train
+  representation: dino
+
+  is_eval: false
+  overrides:
+    geometry_config_overrides:
+      angle_sampler:
+        x_components:
+          loc: 0
+          scale: 0.01
+        y_components:
+          loc: 0
+          scale: 0.01
+      scale_sampler:
+        abs_components:
+          scale: 0.2
+        rel_components:
+          loc: -0.1
+          scale: 0.2
+  output: coresets/synthetic_small_zoom_train_dino.pt
+- name: synthetic_large_zoom
+  dataset_name: synthetic
+  split: train
+  representation: dino
+
+  is_eval: false
+  overrides:
+    geometry_config_overrides:
+      angle_sampler:
+        x_components:
+          loc: 0
+          scale: 0.01
+        y_components:
+          loc: 0
+          scale: 0.01
+      scale_sampler:
+        abs_components:
+          scale: 0.5
+        rel_components:
+          loc: -0.35
+          scale: 0.5
+  output: coresets/synthetic_large_zoom_train_dino.pt
+- name: synthetic_random_flipping
+  dataset_name: synthetic
+  split: train
+  representation: dino
+
+  is_eval: false
+  overrides:
+    geometry_config_overrides:
+      random_flip: 0.5
+  output: coresets/synthetic_random_flipping_train_dino.pt
+- name: sintel
+  split: train
+  representation: dino
+
+  is_eval: false
+  output: coresets/sintel_train_dino.pt
+- name: spair
+  split: train
+  representation: dino
+
+  is_eval: false
+  output: coresets/spair_train_dino.pt
+- name: pointodyssey
+  split: train
+  representation: dino
+
+  is_eval: false
+  output: coresets/pointodyssey_train_dino.pt
+- name: kitti2015
+  split: val
+  representation: dino
+
+  is_eval: true
+  output: coresets/kitti_val_dino.pt
+- name: kitti2012
+  split: val
+  representation: dino
+
+  is_eval: true
+  output: coresets/kitti2012_val_dino.pt
+- name: spair
+  split: test
+  representation: dino
+
+  is_eval: true
+  output: coresets/spair_val_dino.pt
+- name: pfpascal
+  split: test
+  representation: dino
+
+  is_eval: true
+  output: coresets/pfpascal_val_dino.pt
+- name: pfwillow
+  split: test
+  representation: dino
+
+  is_eval: true
+  output: coresets/pfwillow_val_dino.pt
+# FlyingThings test first for fast failure detection
+- name: flyingthings
+  split: test
+  representation: dino
+
+  is_eval: true
+  output: coresets/flyingthings_val_dino.pt
+- name: pointodyssey
+  split: test
+  representation: dino
+
+  is_eval: true
+  output: coresets/pointodyssey_val_dino.pt
+- name: tss
+  split: val
+  representation: dino
+
+  is_eval: true
+  output: coresets/tss_val_dino.pt
+- name: middlebury
+  split: val
+  representation: dino
+
+  is_eval: true
+  output: coresets/middlebury_val_dino.pt
+- name: spair_synthetic_30_70
+  split: train
+
+  mixed: true
+  datasets:
+  - spair
+  - synthetic
+  percentages:
+  - 0.3
+  - 0.7
+- name: spair_synthetic_50_50
+  split: train
+
+  mixed: true
+  datasets:
+  - spair
+  - synthetic
+  percentages:
+  - 0.5
+  - 0.5
+- name: spair_synthetic_70_30
+  split: train
+
+  mixed: true
+  datasets:
+  - spair
+  - synthetic
+  percentages:
+  - 0.7
+  - 0.3
+- name: pointodyssey_synthetic_30_70
+  split: train
+
+  mixed: true
+  datasets:
+  - pointodyssey
+  - synthetic
+  percentages:
+  - 0.3
+  - 0.7
+- name: pointodyssey_synthetic_50_50
+  split: train
+
+  mixed: true
+  datasets:
+  - pointodyssey
+  - synthetic
+  percentages:
+  - 0.5
+  - 0.5
+- name: pointodyssey_synthetic_70_30
+  split: train
+
+  mixed: true
+  datasets:
+  - pointodyssey
+  - synthetic
+  percentages:
+  - 0.7
+  - 0.3
+- name: flyingthings_synthetic_30_70
+  split: train
+
+  mixed: true
+  datasets:
+  - flyingthings
+  - synthetic
+  percentages:
+  - 0.3
+  - 0.7
+- name: flyingthings_synthetic_70_30
+  split: train
+
+  mixed: true
+  datasets:
+  - flyingthings
+  - synthetic
+  percentages:
+  - 0.7
+  - 0.3
+- name: sintel_synthetic_30_70
+  split: train
+
+  mixed: true
+  datasets:
+  - sintel
+  - synthetic
+  percentages:
+  - 0.3
+  - 0.7
+- name: sintel_synthetic_70_30
+  split: train
+
+  mixed: true
+  datasets:
+  - sintel
+  - synthetic
+  percentages:
+  - 0.7
+  - 0.3

@@ -1,0 +1,62 @@
+# OS/editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.python-version
+.venv/
+venv/
+env/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# Packaging/build
+build/
+dist/
+*.egg-info/
+
+# Local env/config
+.env
+.env.*
+
+# Logs
+logs/
+*.log
+
+# Training outputs and analysis artifacts
+snapshots/
+analysis/
+archive/
+debug/
+
+# TensorBoard
+**/tb/
+events.out.tfevents.*
+
+# Large model/data artifacts
+models/Datasets_CATs/
+models/Datasets_CATs.zip
+models/**/pretrained/
+models/**/snapshots/
+models/**/outputs/
+models/**/inputs/
+models/**/extracted_features/
+models/**/*_extracted_features/
+models/**/umap_results/
+models/**/*_umap_results/
+
+# Common ML binary artifacts
+*.ckpt
+*.pth
+*.pt
+*.onnx
+*.npy
+*.npz

@@ -1,0 +1,1787 @@
+"""
+PointOdyssey dataset wrapper for correspondence and optical flow.
+
+This module provides a wrapper around the PointOdyssey dataset that returns
+data in a format suitable for correspondence learning: src, trg, and flow.
+"""
+
+import torch
+import numpy as np
+from typing import Dict, Any, Optional, Tuple
+import sys
+import os
+from pathlib import Path
+import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
+import random as _random
+import json
+import hashlib
+import glob
+
+# Add the project root to sys.path so models.CATs_PlusPlus can be imported
+project_root = Path(__file__).parent.parent.parent.parent.parent
+sys.path.insert(0, str(project_root))
+
+# Add the pips2 path to sys.path so the utils can be found
+pips2_path = Path(__file__).parent / "pips2"
+sys.path.insert(0, str(pips2_path))
+
+# Import the base dataset and utils
+from src.data.synth.datasets.pips2.datasets.pointodysseydataset import PointOdysseyDataset as BasePointOdysseyDataset
+
+class PointOdysseySimpleDataset(torch.utils.data.Dataset):
+    """
+    Wrapper for PointOdyssey dataset that returns simple data. This should replace the Bespoke Flow Dataset.
+    
+    Returns:
+        - src_img: Source image (first frame)
+        - trg_img: Target image (second frame) 
+        - src_kps: Source keypoints (2, M) in pixel space, only valid keypoints (filtered)
+        - trg_kps: Target keypoints (2, M) in pixel space, only valid keypoints (filtered)
+        - n_pts: Number of valid keypoints (scalar tensor)
+    """
+    
+    def __init__(self, 
+                 dataset_location: str = '/home/spencer/Data/sample',
+                 dset: str = 'train',
+                 use_augs: bool = False,
+                 S: int = 8,
+                 N: int = 32,
+                 strides: list = [1, 2, 4,],    
+                 clip_step: int = 2,
+                 resize_size: tuple = (512 + 64, 512 + 64),
+                 crop_size: tuple = (512, 512),
+                 req_full: bool = False,
+                 quick: bool = False,
+                 verbose: bool = True,
+                reverse_flow: bool = True,
+                thres: str = 'img',
+                use_all_valid: bool = False,
+                disable_motion_filter: bool = False,
+                val_sequence_fraction: Optional[float] = None,
+                max_sequences: Optional[int] = None,
+                subset_mode: str = "none",
+                subset_indices_path: Optional[str] = None,
+                random_subset_size: Optional[int] = None,
+                random_subset_seed: int = 2021):
+        """
+        Initialize the PointOdyssey flow dataset.
+        
+        Args:
+            dataset_location: Path to PointOdyssey dataset
+            dset: Dataset split ('train', 'val', 'test')
+            use_augs: Whether to use data augmentations
+            S: Number of frames per sequence
+            N: Number of points to track (used as minimum requirement and for farthest point sampling when use_all_valid=False)
+            strides: Frame strides for sampling
+            clip_step: Step size for clip sampling
+            resize_size: Size to resize images to
+            crop_size: Size to crop images to
+            req_full: Whether to require full sequences
+            quick: Whether to use quick mode (fewer samples)
+            verbose: Whether to print verbose information
+            reverse_flow: Whether to reverse flow direction
+            thres: PCK threshold type ('img' or 'bbox')
+            use_all_valid: If True, returns all valid trajectories after filtering (no truncation).
+                          If False, uses farthest point sampling to select N diverse trajectories (default: False)
+            disable_motion_filter: If True, disables motion filtering (velocity/acceleration/jerk checks).
+                                  Useful for correspondence tasks where you only need valid correspondences
+                                  between frames, not smooth trajectories (default: False)
+            val_sequence_fraction: Fraction of sequence frames to use for validation (e.g., 0.2 for 20%).
+                                  Only applies to val/test splits. None uses full sequences (default: None)
+            max_sequences: Maximum number of sequences to include from the dataset.
+                           Useful for fast smoke tests.
+            subset_mode: Subset policy for training pool.
+                         - none: use all cached/available indices
+                         - random: pick random subset indices from pool
+                         - heuristic: use explicit subset_indices_path (raises if missing)
+            subset_indices_path: Optional path to explicit subset index file
+                                (JSON list, .npy, .pt, or one index per line)
+            random_subset_size: Number of indices to sample when subset_mode='random'
+            random_subset_seed: RNG seed for deterministic random subset sampling
+        """
+        # Check if the dataset has the expected structure (with train/val/test subdirs)
+        expected_dset_path = os.path.join(dataset_location, dset)
+        self.dataset_location = dataset_location
+        self.dset = dset
+        self.strides = strides
+        if not os.path.exists(expected_dset_path):
+            # If no train/val/test subdirs, assume sequences are directly in dataset_location
+            print(f"Warning: No '{dset}' subdirectory found in {dataset_location}")
+            print("Assuming sequences are directly in the dataset location")
+            # Create a temporary structure by pointing to the parent directory
+            actual_dataset_location = os.path.dirname(dataset_location)
+            actual_dset = os.path.basename(dataset_location)
+        else:
+            actual_dataset_location = dataset_location
+            actual_dset = dset
+            
+        self.base_dataset = BasePointOdysseyDataset(
+            dataset_location=actual_dataset_location,
+            dset=actual_dset,
+            use_augs=use_augs,
+            S=S,
+            N=N,
+            strides=strides,
+            clip_step=clip_step,
+            resize_size=resize_size,
+            crop_size=crop_size,
+            req_full=req_full,
+            quick=quick,
+            max_sequences=max_sequences,
+            verbose=verbose,
+            use_all_valid=use_all_valid,
+            disable_motion_filter=disable_motion_filter,
+            val_sequence_fraction=val_sequence_fraction,
+        )
+        
+        self.S = S
+        self.N = N
+        self.verbose = verbose
+        self.reverse_flow = reverse_flow
+        self.thres = thres
+        self.max_sequences = max_sequences
+        self.subset_mode = subset_mode
+        self.subset_indices_path = subset_indices_path
+        self.random_subset_size = random_subset_size
+        self.random_subset_seed = random_subset_seed
+        # Device management - defaults to CPU
+        self._device = torch.device('cpu')
+        
+        # Cache management for valid/invalid indices (read-only)
+        self.cache_dir = os.path.join(actual_dataset_location, '.cache')
+        os.makedirs(self.cache_dir, exist_ok=True)
+        
+        # Create a unique hash for this dataset configuration
+        config_str = json.dumps({
+            'dataset_location': actual_dataset_location,
+            'dset': actual_dset,
+            'S': S,
+            'N': N,
+            'strides': sorted(strides),
+            'clip_step': clip_step,
+            'resize_size': resize_size,
+            'crop_size': crop_size,
+            'req_full': req_full,
+            'max_sequences': max_sequences,
+        }, sort_keys=True)
+        
+        config_hash = hashlib.md5(config_str.encode()).hexdigest()[:8]  # Use first 8 chars for brevity
+        
+        # Create a more readable filename with key parameters
+        strides_str = '_'.join(map(str, sorted(strides)))
+        cache_name = f'valid_indices_{actual_dset}_S{S}_N{N}_strides{strides_str}_{config_hash}.json'
+        self.cache_file = os.path.join(self.cache_dir, cache_name)
+        
+        # Store pattern for fallback matching (human-readable parts: dset, S, N, strides)
+        self._cache_pattern = f'valid_indices_{actual_dset}_S{S}_N{N}_strides{strides_str}_*.json'
+        self._expected_hash = config_hash  # Store for debug messages
+        
+        # Read-only cache: sorted list for fast indexing
+        self._valid_indices_list = None  # Sorted list of valid indices
+        self._invalid_indices_set = None  # Set for fast lookup
+        self._subset_indices = None  # Final list of indices used by dataset
+        # In-memory fallback when cache is unavailable (per-worker instance).
+        self._fallback_valid_indices = []
+        self._fallback_invalid_indices = set()
+        self._fallback_max_tries = 50
+        
+        # Load existing cache (read-only, no locks needed)
+        self._load_cache()
+
+        # Configure deterministic subset indices (optional)
+        self._initialize_subset_indices()
+        
+    def __len__(self) -> int:
+        """Return the number of samples in the dataset.
+        If cache exists and has valid indices, return count of valid indices only.
+        Otherwise, return full dataset length for random resampling.
+        """
+        if self._subset_indices is not None:
+            return len(self._subset_indices)
+        if self._valid_indices_list is not None:
+            return len(self._valid_indices_list)
+        return len(self.base_dataset)
+
+    def _coerce_int_indices(self, raw_indices):
+        """Coerce a user-provided object to a list of ints."""
+        indices = []
+
+        if isinstance(raw_indices, dict):
+            if 'indices' in raw_indices:
+                raw_indices = raw_indices['indices']
+            elif 'subset' in raw_indices:
+                raw_indices = raw_indices['subset']
+            elif 'valid' in raw_indices:
+                raw_indices = raw_indices['valid']
+            else:
+                raise TypeError(f"Unsupported dict format for subset indices: {list(raw_indices.keys())}")
+
+        for idx in raw_indices:
+            if isinstance(idx, (int, np.integer)):
+                indices.append(int(idx))
+            elif isinstance(idx, (float, np.floating)):
+                indices.append(int(idx))
+            elif isinstance(idx, str):
+                idx = idx.strip().split(',')[0]
+                if idx:
+                    indices.append(int(idx))
+            else:
+                raise TypeError(f"Unsupported index entry type: {type(idx)!r}")
+
+        return indices
+
+    def _load_subset_indices_file(self, path: str):
+        """Load subset indices from disk. Supports common formats."""
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Subset indices file not found: {path}")
+
+        suffix = Path(path).suffix.lower()
+        if suffix in ['.json', '.js', '.jsn']:
+            with open(path, 'r') as f:
+                data = json.load(f)
+            return self._coerce_int_indices(data)
+
+        if suffix in ['.npy', '.npz']:
+            data = np.load(path)
+            if isinstance(data, np.lib.npyio.NpzFile):
+                if 'indices' in data.files:
+                    data = data['indices']
+                elif 'subset' in data.files:
+                    data = data['subset']
+            return self._coerce_int_indices(data.tolist() if hasattr(data, 'tolist') else data)
+
+        if suffix in ['.pt', '.pth', '.ckpt']:
+            data = torch.load(path, map_location='cpu')
+            return self._coerce_int_indices(data)
+
+        with open(path, 'r') as f:
+            lines = [line.strip() for line in f if line.strip()]
+        return self._coerce_int_indices(lines)
+
+    def _initialize_subset_indices(self):
+        """Set up subset indices used for training samples."""
+        mode = (self.subset_mode or 'none').lower()
+        total_base_len = len(self.base_dataset)
+
+        if total_base_len == 0:
+            self._subset_indices = []
+            return
+
+        if self._valid_indices_list is not None:
+            valid_lookup = set(self._valid_indices_list)
+            candidate_indices = self._valid_indices_list
+        else:
+            valid_lookup = None
+            candidate_indices = list(range(total_base_len))
+
+        subset_indices = None
+
+        if self.subset_indices_path:
+            loaded = self._load_subset_indices_file(self.subset_indices_path)
+            if valid_lookup is not None:
+                subset_indices = [idx for idx in loaded if isinstance(idx, int) and 0 <= idx < total_base_len and idx in valid_lookup]
+            else:
+                subset_indices = [idx for idx in loaded if isinstance(idx, int) and 0 <= idx < total_base_len]
+
+            if self.verbose and not subset_indices:
+                print(f"[PointOdyssey] Loaded 0 in-range subset indices from {self.subset_indices_path}", flush=True)
+
+        elif mode == 'random':
+            if self.random_subset_size is None:
+                subset_indices = list(candidate_indices)
+            else:
+                target_count = min(max(0, int(self.random_subset_size)), len(candidate_indices))
+                if target_count == 0:
+                    subset_indices = []
+                elif target_count >= len(candidate_indices):
+                    subset_indices = list(candidate_indices)
+                else:
+                    rng = np.random.default_rng(self.random_subset_seed)
+                    subset_indices = rng.choice(candidate_indices, size=target_count, replace=False).tolist()
+
+        elif mode == 'heuristic':
+            raise ValueError("pointodyssey subset_mode='heuristic' requires subset_indices_path")
+
+        if subset_indices is None:
+            return
+
+        self._subset_indices = list(subset_indices)
+
+        if valid_lookup is not None and mode != 'random':
+            stale_count = 0
+            cleaned = []
+            for idx in self._subset_indices:
+                if idx in valid_lookup:
+                    cleaned.append(idx)
+                else:
+                    stale_count += 1
+
+            if stale_count:
+                if self.verbose:
+                    print(
+                        f"[PointOdyssey] Filtering stale indices from subset: "
+                        f"{stale_count} removed, {len(cleaned)} remain",
+                        flush=True,
+                    )
+                self._subset_indices = cleaned
+
+        if self.verbose:
+            if self.subset_indices_path:
+                print(f"[PointOdyssey] Loaded {len(self._subset_indices)} indices from {self.subset_indices_path}", flush=True)
+            elif mode == 'random':
+                print(
+                    f"[PointOdyssey] Random subset configured ({self.random_subset_seed}) "
+                    f"size={len(self._subset_indices)}",
+                    flush=True,
+                )
+
+        if not self._subset_indices:
+            print("[PointOdyssey] Warning: active subset is empty", flush=True)
+
+    def _sample_from_subset(self, index: int):
+        """Resolve a dataset index from the configured subset with deterministic fallback."""
+        subset_len = len(self._subset_indices)
+        if subset_len == 0:
+            raise RuntimeError("PointOdyssey subset is empty")
+
+        candidate_order = self._subset_indices[index:]
+        if index > 0:
+            candidate_order += self._subset_indices[:index]
+
+        for actual_index in candidate_order:
+            sample, gotit = self.base_dataset[actual_index]
+            if gotit:
+                return sample, gotit, actual_index
+
+        if self._valid_indices_list:
+            for actual_index in self._valid_indices_list:
+                sample, gotit = self.base_dataset[actual_index]
+                if gotit:
+                    return sample, gotit, actual_index
+
+        raise RuntimeError("Failed to get valid sample from configured subset")
+
+    def _load_cache(self):
+        """Load validation cache from disk (read-only, called at init).
+        First tries exact hash match, then falls back to matching by human-readable pattern (dset, S, N, strides).
+        """
+        cache_file_to_use = None
+        hash_mismatch = False
+        
+        # First, try exact hash match
+        if os.path.exists(self.cache_file):
+            cache_file_to_use = self.cache_file
+        else:
+            # Fallback: search for cache files matching the human-readable pattern
+            # Pattern: valid_indices_{dset}_S{S}_N{N}_strides{strides}_*.json
+            pattern = os.path.join(self.cache_dir, self._cache_pattern)
+            matching_files = glob.glob(pattern)
+            
+            if matching_files:
+                # Use the most recent matching file (by modification time)
+                matching_files.sort(key=os.path.getmtime, reverse=True)
+                cache_file_to_use = matching_files[0]
+                hash_mismatch = True
+                
+                # Extract hash from filename for info
+                filename = os.path.basename(cache_file_to_use)
+                # Pattern: valid_indices_*_S*_N*_strides*_HASH.json
+                parts = filename.replace('.json', '').split('_')
+                found_hash = parts[-1] if parts else "unknown"
+                
+                print(f"[PointOdyssey] ⚠️  Exact hash match not found, but found matching cache by pattern!", flush=True)
+                print(f"[PointOdyssey]   Expected hash: {self._expected_hash}", flush=True)
+                print(f"[PointOdyssey]   Found hash: {found_hash}", flush=True)
+                print(f"[PointOdyssey]   Using cache: {os.path.basename(cache_file_to_use)}", flush=True)
+                print(f"[PointOdyssey]   (Matched by: dset, S, N, strides - safe to use)", flush=True)
+        
+        # Load the cache file if found
+        if cache_file_to_use:
+            try:
+                with open(cache_file_to_use, 'r') as f:
+                    cache_data = json.load(f)
+                    valid_indices = cache_data.get('valid', [])
+                    invalid_indices = cache_data.get('invalid', [])
+                    
+                    # Convert to sorted list for fast indexing and set for fast lookup
+                    self._valid_indices_list = sorted(valid_indices)
+                    self._invalid_indices_set = set(invalid_indices)
+                    
+                # Always print cache status (independent of verbose)
+                if hash_mismatch:
+                    # Already printed warning above, just print success
+                    print(f"[PointOdyssey] Loaded {len(self._valid_indices_list)} valid indices from cache", flush=True)
+                elif self.verbose:
+                    print(f"[PointOdyssey] Loaded cache from {os.path.basename(cache_file_to_use)}: {len(self._valid_indices_list)} valid, {len(self._invalid_indices_set)} invalid indices", flush=True)
+                else:
+                    print(f"[PointOdyssey] Using cache: {len(self._valid_indices_list)} valid indices (dataset size: {len(self._valid_indices_list)})", flush=True)
+            except Exception as e:
+                # Always print cache errors (independent of verbose)
+                print(f"[PointOdyssey] Failed to load cache: {e}", flush=True)
+                self._valid_indices_list = None
+                self._invalid_indices_set = None
+        else:
+            # Always print when no cache found (independent of verbose)
+            print(f"[PointOdyssey] No cache found (searched for exact: {os.path.basename(self.cache_file)})", flush=True)
+            print(f"[PointOdyssey] Pattern search: {self._cache_pattern}", flush=True)
+            print(f"[PointOdyssey] Will use first valid index fallback", flush=True)
+            self._valid_indices_list = None
+            self._invalid_indices_set = None
+    
+
+    def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
+        """
+        Get a sample from the dataset (training/validation mode - READ ONLY).
+        Uses cache if available (fast lookup), otherwise grabs the first valid index.
+        
+        Args:
+            index: Sample index (0 to len(self)-1)
+            
+        Returns:
+            Dictionary containing:
+                - 'src_img': Source image tensor (C, H, W)
+                - 'trg_img': Target image tensor (C, H, W) 
+                - 'flow': Flow tensor (2, H, W) from trg to src
+        """
+        if self._subset_indices is not None:
+            sample, gotit, actual_index = self._sample_from_subset(index)
+        elif self._valid_indices_list is not None:
+            # Legacy behavior: map index directly to cache index
+            if index < len(self._valid_indices_list):
+                actual_index = self._valid_indices_list[index]
+                sample, gotit = self.base_dataset[actual_index]
+            else:
+                raise RuntimeError("PointOdyssey index out of range")
+
+            if not gotit:
+                sample = None
+                for idx in self._valid_indices_list:
+                    sample, gotit = self.base_dataset[idx]
+                    if gotit:
+                        actual_index = idx
+                        break
+                if not gotit:
+                    raise RuntimeError("Failed to get valid sample from cache")
+        else:
+            # No cache path: deterministic fallback search starting from index
+            actual_index = index
+            sample, gotit = self.base_dataset[actual_index]
+            if gotit:
+                self._fallback_valid_indices.append(actual_index)
+            else:
+                self._fallback_invalid_indices.add(actual_index)
+
+            if not gotit:
+                if self._fallback_valid_indices:
+                    actual_index = _random.choice(self._fallback_valid_indices)
+                    sample, gotit = self.base_dataset[actual_index]
+                    if not gotit:
+                        self._fallback_invalid_indices.add(actual_index)
+
+                if not gotit:
+                    max_tries = min(self._fallback_max_tries, len(self.base_dataset))
+                    for _ in range(max_tries):
+                        candidate = _random.randrange(len(self.base_dataset))
+                        if candidate in self._fallback_invalid_indices:
+                            continue
+                        sample, gotit = self.base_dataset[candidate]
+                        if gotit:
+                            actual_index = candidate
+                            self._fallback_valid_indices.append(candidate)
+                            break
+                        self._fallback_invalid_indices.add(candidate)
+
+                if not gotit:
+                    for idx in range(len(self.base_dataset)):
+                        if idx in self._fallback_invalid_indices:
+                            continue
+                        sample, gotit = self.base_dataset[idx]
+                        if gotit:
+                            actual_index = idx
+                            self._fallback_valid_indices.append(idx)
+                            break
+
+                if not gotit:
+                    raise RuntimeError("Failed to get valid sample - no valid indices found")
+        
+        # Keep everything on CPU - DataLoader will handle GPU transfer
+        # Extract the data we need (keep on CPU)
+        rgbs = sample['rgbs']  # (S, C, H, W) - keep on CPU
+        trajs = sample['trajs']  # (S, N, 2) - keep on CPU
+        visibs = sample['visibs']  # (S, N) - keep on CPU
+        valids = sample['valids']  # (S, N) - keep on CPU
+        masks = sample['masks']  # (S, 1, H, W) - keep on CPU
+
+        i, j = 0, self.S - 1
+        if self.reverse_flow:
+            i, j = j, i
+        
+        src_img = rgbs[i]
+        trg_img = rgbs[j]
+        
+        # Convert images to float32 in [0, 1] range (on CPU)
+        src_img = src_img.to(torch.float32) / 255.0
+        trg_img = trg_img.to(torch.float32) / 255.0
+        
+        # Clamp to ensure valid [0, 1] range before normalization
+        src_img = torch.clamp(src_img, 0.0, 1.0)
+        trg_img = torch.clamp(trg_img, 0.0, 1.0)
+
+        # Trajectories and flags for those two frames
+        src_trajs = trajs[i]  # (N, 2)
+        trg_trajs = trajs[j]  # (N, 2)
+        src_vis = visibs[i]  # (N,)
+        trg_vis = visibs[j]  # (N,)
+        src_valid = valids[i]  # (N,)
+        trg_valid = valids[j]  # (N,)
+
+        # Filter to only valid keypoints (both src and trg must be valid)
+        valid_mask = src_valid.bool() & trg_valid.bool()
+        valid_indices = valid_mask.nonzero(as_tuple=False).squeeze(1)
+        
+        if len(valid_indices) == 0:
+            # No valid keypoints - return empty keypoints
+            src_kps = torch.zeros((2, 0), dtype=torch.float32, device=src_trajs.device)
+            trg_kps = torch.zeros((2, 0), dtype=torch.float32, device=trg_trajs.device)
+            n_pts = 0
+        else:
+            # Extract valid keypoints only
+            valid_src_trajs = src_trajs[valid_indices]  # (M, 2)
+            valid_trg_trajs = trg_trajs[valid_indices]  # (M, 2)
+            
+            # Convert to keypoints format [2, M] (x, y coordinates)
+            # Trajectories are already in pixel space
+            src_kps = valid_src_trajs.t()  # (2, M) - transpose from (M, 2) to (2, M)
+            trg_kps = valid_trg_trajs.t()  # (2, M) - transpose from (M, 2) to (2, M)
+            n_pts = len(valid_indices)
+
+        return {
+            "src_img": src_img,
+            "trg_img": trg_img,
+            "src_kps": src_kps,  # (2, M) in pixel space, only valid keypoints
+            "trg_kps": trg_kps,  # (2, M) in pixel space, only valid keypoints
+            "n_pts": torch.tensor(n_pts, dtype=torch.int32, device=src_trajs.device),
+        }
+
+class PointOdysseyFlowDataset(torch.utils.data.Dataset):
+    """
+    Wrapper for PointOdyssey dataset that returns correspondence data.
+    
+    Returns:
+        - src: Source image (first frame)
+        - trg: Target image (second frame) 
+        - flow: Optical flow from trg to src (dx, dy)
+    """
+    
+    def __init__(self, 
+                 dataset_location: str = '/home/spencer/Data/sample',
+                 dset: str = 'train',
+                 use_augs: bool = False,
+                 S: int = 8,
+                 N: int = 32,
+                 strides: list = [1, 2, 4,],
+                 clip_step: int = 2,
+                 resize_size: tuple = (368+64, 496+64),
+                 crop_size: tuple = (368, 496),
+                 req_full: bool = False,
+                 quick: bool = False,
+                 verbose: bool = False,
+                 filter_instances: bool = False,
+                 reverse_flow: bool = True,
+                 downsample_for_cats: bool = False,
+                 cats_feat_size: int = 32,
+                 all_points: bool = False,
+                 max_sequences: Optional[int] = None,
+                 max_pts: int = 40,
+                 thres: str = 'img',
+                 normalize_images: bool = False,
+                 normalize: bool = True,
+                 val_sequence_fraction: Optional[float] = None):
+        """
+        Initialize the PointOdyssey flow dataset.
+        
+        Args:
+            dataset_location: Path to PointOdyssey dataset
+            dset: Dataset split ('train', 'val', 'test')
+            use_augs: Whether to use data augmentations
+            S: Number of frames per sequence
+            N: Number of points to track
+            strides: Frame strides for sampling
+            clip_step: Step size for clip sampling
+            resize_size: Size to resize images to
+            crop_size: Size to crop images to
+            req_full: Whether to require full sequences
+            quick: Whether to use quick mode (fewer samples)
+            verbose: Whether to print verbose information
+            filter_instances: Whether to filter instances
+            reverse_flow: Whether to reverse flow direction
+            downsample_for_cats: Whether to downsample flow for CATs (training mode)
+            cats_feat_size: Feature size for downsampled flow
+            all_points: Doesn't do any thing anymore.
+            max_sequences: Maximum number of sequences to use (None = all, deterministic sampling)
+            max_pts: Maximum number of keypoints (default: 40). Padded keypoints use (0, 0) so flow is (0, 0) and doesn't affect metrics.
+            thres: PCK threshold type ('img' or 'bbox')
+            normalize_images: If True, enables validation mode and returns keypoints-based format for evaluation
+            normalize: If True, applies ImageNet normalization to images (default: True, model expects normalized images)
+        """
+        # Check if the dataset has the expected structure (with train/val/test subdirs)
+        expected_dset_path = os.path.join(dataset_location, dset)
+        self.dataset_location = dataset_location
+        self.dset = dset
+        self.strides = strides
+        if not os.path.exists(expected_dset_path):
+            # If no train/val/test subdirs, assume sequences are directly in dataset_location
+            print(f"Warning: No '{dset}' subdirectory found in {dataset_location}")
+            print("Assuming sequences are directly in the dataset location")
+            # Create a temporary structure by pointing to the parent directory
+            actual_dataset_location = os.path.dirname(dataset_location)
+            actual_dset = os.path.basename(dataset_location)
+        else:
+            actual_dataset_location = dataset_location
+            actual_dset = dset
+            
+        self.base_dataset = BasePointOdysseyDataset(
+            dataset_location=actual_dataset_location,
+            dset=actual_dset,
+            use_augs=use_augs,
+            S=S,
+            N=N,
+            strides=strides,
+            clip_step=clip_step,
+            resize_size=resize_size,
+            crop_size=crop_size,
+            req_full=req_full,
+            quick=quick,
+            max_sequences=max_sequences,
+            verbose=verbose,
+        )
+        
+        self.S = S
+        self.N = N
+        self.filter_instances = filter_instances
+        self.downsample_for_cats = downsample_for_cats
+        self.cats_feat_size = cats_feat_size
+        self.verbose = verbose
+        self.reverse_flow = reverse_flow
+        self.max_pts = max_pts
+        self.thres = thres
+        self.normalize_images = normalize_images
+        self.normalize = normalize
+        self.val_sequence_fraction = val_sequence_fraction
+        # Device management - defaults to CPU
+        self._device = torch.device('cpu')
+        
+        # Initialize KeypointToFlow converter only when downsample_for_cats is True
+        # This replaces manual flow calculation for consistency with other datasets
+        self.kps_to_flow = None
+        if downsample_for_cats:
+            try:
+                from models.CATs_PlusPlus.data.keypoint_to_flow import KeypointToFlow
+                # Get image size from crop_size (final size after processing)
+                img_size = crop_size[0] if isinstance(crop_size, tuple) else crop_size
+                self.kps_to_flow = KeypointToFlow(
+                    receptive_field_size=35,
+                    jsz=img_size // cats_feat_size,
+                    feat_size=cats_feat_size,
+                    img_size=img_size
+                )
+            except ImportError:
+                self.kps_to_flow = None
+        
+        # Cache management for valid/invalid indices (read-only)
+        self.cache_dir = os.path.join(actual_dataset_location, '.cache')
+        os.makedirs(self.cache_dir, exist_ok=True)
+        
+        # Create a unique hash for this dataset configuration
+        config_str = json.dumps({
+            'dataset_location': actual_dataset_location,
+            'dset': actual_dset,
+            'S': S,
+            'N': N,
+            'strides': sorted(strides),
+            'clip_step': clip_step,
+            'resize_size': resize_size,
+            'crop_size': crop_size,
+            'req_full': req_full,
+            'max_sequences': max_sequences,
+            'val_sequence_fraction': val_sequence_fraction,
+        }, sort_keys=True)
+        
+        config_hash = hashlib.md5(config_str.encode()).hexdigest()[:8]  # Use first 8 chars for brevity
+        
+        # Create a more readable filename with key parameters
+        strides_str = '_'.join(map(str, sorted(strides)))
+        cache_name = f'valid_indices_{actual_dset}_S{S}_N{N}_strides{strides_str}_{config_hash}.json'
+        self.cache_file = os.path.join(self.cache_dir, cache_name)
+        
+        # Store pattern for fallback matching (human-readable parts: dset, S, N, strides)
+        self._cache_pattern = f'valid_indices_{actual_dset}_S{S}_N{N}_strides{strides_str}_*.json'
+        self._expected_hash = config_hash  # Store for debug messages
+        
+        # Read-only cache: sorted list for fast indexing
+        self._valid_indices_list = None  # Sorted list of valid indices
+        self._invalid_indices_set = None  # Set for fast lookup
+        
+        # Load existing cache (read-only, no locks needed)
+        self._load_cache()
+        
+        # Downsample cache if val_sequence_fraction is provided
+        if val_sequence_fraction is not None and val_sequence_fraction < 1.0 and self._valid_indices_list is not None:
+            print(f"[PointOdyssey] Downsampling cache to {val_sequence_fraction} of valid indices", flush=True)
+            self._downsample_cache(val_sequence_fraction)
+        
+    def __len__(self) -> int:
+        """Return the number of samples in the dataset.
+        If cache exists and has valid indices, return count of valid indices only.
+        Otherwise, return full dataset length for random resampling.
+        """
+        if self._valid_indices_list is not None:
+            return len(self._valid_indices_list)
+        return len(self.base_dataset)
+    
+    def _downsample_cache(self, val_sequence_fraction):
+        """
+        Downsample the valid indices list by keeping only a fraction of them.
+        This reduces the dataset size for faster validation.
+        
+        Args:
+            val_sequence_fraction: Fraction to keep (e.g., 0.2 keeps 20% of valid indices)
+        """
+        if self._valid_indices_list is None or len(self._valid_indices_list) == 0:
+            return
+        
+        original_count = len(self._valid_indices_list)
+        target_count = int(original_count * val_sequence_fraction)
+        
+        if target_count == 0:
+            target_count = 1  # Keep at least one sample
+        
+        # Evenly sample indices to keep the distribution uniform
+        # Use numpy to get evenly spaced indices
+        indices_to_keep = np.linspace(0, original_count - 1, target_count, dtype=int)
+        self._valid_indices_list = [self._valid_indices_list[i] for i in indices_to_keep]
+        
+        # Keep the list sorted (it should already be sorted, but ensure it)
+        self._valid_indices_list = sorted(self._valid_indices_list)
+        
+        if self.verbose:
+            print(f"[PointOdyssey] Downsampled cache: {original_count} -> {len(self._valid_indices_list)} valid indices (fraction: {val_sequence_fraction})", flush=True)
+
+    def _load_cache(self):
+        """Load validation cache from disk (read-only, called at init).
+        First tries exact hash match, then falls back to matching by human-readable pattern (dset, S, N, strides).
+        """
+        cache_file_to_use = None
+        hash_mismatch = False
+        
+        # First, try exact hash match
+        if os.path.exists(self.cache_file):
+            cache_file_to_use = self.cache_file
+        else:
+            # Fallback: search for cache files matching the human-readable pattern
+            # Pattern: valid_indices_{dset}_S{S}_N{N}_strides{strides}_*.json
+            pattern = os.path.join(self.cache_dir, self._cache_pattern)
+            matching_files = glob.glob(pattern)
+            
+            if matching_files:
+                # Use the most recent matching file (by modification time)
+                matching_files.sort(key=os.path.getmtime, reverse=True)
+                cache_file_to_use = matching_files[0]
+                hash_mismatch = True
+                
+                # Extract hash from filename for info
+                filename = os.path.basename(cache_file_to_use)
+                # Pattern: valid_indices_*_S*_N*_strides*_HASH.json
+                parts = filename.replace('.json', '').split('_')
+                found_hash = parts[-1] if parts else "unknown"
+                
+                print(f"[PointOdyssey] ⚠️  Exact hash match not found, but found matching cache by pattern!", flush=True)
+                print(f"[PointOdyssey]   Expected hash: {self._expected_hash}", flush=True)
+                print(f"[PointOdyssey]   Found hash: {found_hash}", flush=True)
+                print(f"[PointOdyssey]   Using cache: {os.path.basename(cache_file_to_use)}", flush=True)
+                print(f"[PointOdyssey]   (Matched by: dset, S, N, strides - safe to use)", flush=True)
+        
+        # Load the cache file if found
+        if cache_file_to_use:
+            try:
+                with open(cache_file_to_use, 'r') as f:
+                    cache_data = json.load(f)
+                    valid_indices = cache_data.get('valid', [])
+                    invalid_indices = cache_data.get('invalid', [])
+                    
+                    # Convert to sorted list for fast indexing and set for fast lookup
+                    self._valid_indices_list = sorted(valid_indices)
+                    self._invalid_indices_set = set(invalid_indices)
+                    
+                # Always print cache status (independent of verbose)
+                if hash_mismatch:
+                    # Already printed warning above, just print success
+                    print(f"[PointOdyssey] Loaded {len(self._valid_indices_list)} valid indices from cache", flush=True)
+                elif self.verbose:
+                    print(f"[PointOdyssey] Loaded cache from {os.path.basename(cache_file_to_use)}: {len(self._valid_indices_list)} valid, {len(self._invalid_indices_set)} invalid indices", flush=True)
+                else:
+                    print(f"[PointOdyssey] Using cache: {len(self._valid_indices_list)} valid indices (dataset size: {len(self._valid_indices_list)})", flush=True)
+            except Exception as e:
+                # Always print cache errors (independent of verbose)
+                print(f"[PointOdyssey] Failed to load cache: {e}", flush=True)
+                self._valid_indices_list = None
+                self._invalid_indices_set = None
+        else:
+            # Always print when no cache found (independent of verbose)
+            print(f"[PointOdyssey] No cache found (searched for exact: {os.path.basename(self.cache_file)})", flush=True)
+            print(f"[PointOdyssey] Pattern search: {self._cache_pattern}", flush=True)
+            print(f"[PointOdyssey] Will use first valid index fallback", flush=True)
+            self._valid_indices_list = None
+            self._invalid_indices_set = None
+    
+
+    def __getitem__(self, index: int) -> Dict[str, torch.Tensor]:
+        """
+        Get a sample from the dataset (training/validation mode - READ ONLY).
+        Uses cache if available (fast lookup), otherwise grabs the first valid index.
+        
+        Args:
+            index: Sample index (0 to len(self)-1)
+            
+        Returns:
+            Dictionary containing:
+                - 'src_img': Source image tensor (C, H, W)
+                - 'trg_img': Target image tensor (C, H, W) 
+                - 'flow': Flow tensor (2, H, W) from trg to src
+        """
+        # If cache exists, map index to valid index (fast lookup)
+        if self._valid_indices_list is not None:
+            # Map requested index to actual valid index in cache
+            if index < len(self._valid_indices_list):
+                actual_index = self._valid_indices_list[index]
+                sample, gotit = self.base_dataset[actual_index]
+                if gotit:
+                    # Success - proceed to process sample
+                    pass
+                else:
+                    # Cache says valid but base dataset says invalid - fall through to first valid index
+                    gotit = False
+            else:
+                # Index out of range for cache - shouldn't happen if __len__ is correct
+                gotit = False
+        else:
+            # No cache - will grab first valid index
+            gotit = False
+        
+        # If cache lookup failed or no cache exists, grab the first valid index
+        if not gotit:
+            # If we have a cache with valid indices, use the first one
+            if self._valid_indices_list is not None and len(self._valid_indices_list) > 0:
+                actual_index = self._valid_indices_list[0]
+                sample, gotit = self.base_dataset[actual_index]
+            else:
+                # No cache - iterate through indices to find first valid one
+                for idx in range(len(self.base_dataset)):
+                    # Skip known-invalid indices if we have invalid set
+                    if self._invalid_indices_set is not None and idx in self._invalid_indices_set:
+                        continue
+                    
+                    # Try this index
+                    sample, gotit = self.base_dataset[idx]
+                    if gotit:
+                        break
+            
+            if not gotit:
+                raise RuntimeError(f"Failed to get valid sample - no valid indices found")
+        
+        # Keep everything on CPU - DataLoader will handle GPU transfer
+        # Extract the data we need (keep on CPU)
+        rgbs = sample['rgbs']  # (S, C, H, W) - keep on CPU
+        trajs = sample['trajs']  # (S, N, 2) - keep on CPU
+        visibs = sample['visibs']  # (S, N) - keep on CPU
+        valids = sample['valids']  # (S, N) - keep on CPU
+        masks = sample['masks']  # (S, 1, H, W) - keep on CPU
+
+        # Sample two non-repeating frames (order doesn't matter)
+        i, j = 0, self.S - 1
+
+        src_img = rgbs[i]
+        trg_img = rgbs[j]
+        
+        # Convert images to float32 in [0, 1] range (on CPU)
+        src_img = src_img.to(torch.float32) / 255.0
+        trg_img = trg_img.to(torch.float32) / 255.0
+        
+        # Clamp to ensure valid [0, 1] range before normalization
+        src_img = torch.clamp(src_img, 0.0, 1.0)
+        trg_img = torch.clamp(trg_img, 0.0, 1.0)
+
+        # Trajectories and flags for those two frames
+        src_trajs = trajs[i]  # (N, 2)
+        trg_trajs = trajs[j]  # (N, 2)
+        src_vis = visibs[i]
+        trg_vis = visibs[j]
+        src_valid = valids[i]
+        trg_valid = valids[j]
+        src_mask = masks[i]
+        trg_mask = masks[j]
+
+        # Normalize images if requested (model expects ImageNet normalization)
+        # ImageNet normalization: (img - mean) / std produces "dark and crunchy" appearance
+        if self.normalize:
+            from torchvision.transforms.functional import normalize
+            src_img = normalize(src_img, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+            trg_img = normalize(trg_img, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+        # Extract valid keypoints from trajectories
+        valid_points = (src_vis > 0) & (trg_vis > 0) & (src_valid > 0) & (trg_valid > 0)
+        
+        if valid_points.any():
+            valid_src_trajs = src_trajs[valid_points]  # (M, 2)
+            valid_trg_trajs = trg_trajs[valid_points]  # (M, 2)
+            n_valid = valid_src_trajs.shape[0]
+            
+            # Convert to [2, M] format (x, y coordinates)
+            src_kps = valid_src_trajs.t()  # [2, M]
+            trg_kps = valid_trg_trajs.t()  # [2, M]
+        else:
+            # No valid points - use dummy keypoints
+            n_valid = 0
+            src_kps = torch.zeros((2, 0), dtype=torch.float32)
+            trg_kps = torch.zeros((2, 0), dtype=torch.float32)
+
+        # Pad/truncate keypoints to max_pts
+        # Use (0, 0) for padding so flow is (0, 0) and doesn't affect loss/metrics
+        if n_valid < self.max_pts:
+            pad_size = self.max_pts - n_valid
+            # Pad with (0, 0) so flow will be (0, 0) for padded points
+            src_kps = torch.cat([src_kps, torch.zeros(2, pad_size, dtype=torch.float32)], dim=1)
+            trg_kps = torch.cat([trg_kps, torch.zeros(2, pad_size, dtype=torch.float32)], dim=1)
+        elif n_valid > self.max_pts:
+            # Truncate to max_pts (use first max_pts keypoints)
+            src_kps = src_kps[:, :self.max_pts]
+            trg_kps = trg_kps[:, :self.max_pts]
+            n_valid = self.max_pts
+
+        # Calculate flow based on downsample_for_cats flag
+        if not self.downsample_for_cats:
+            # Use full resolution flow (manual calculation only)
+            flow_full = self._create_flow_field(
+                src_trajs, trg_trajs, src_vis, trg_vis, src_valid, trg_valid,
+                src_img.shape, src_mask, trg_mask, self.filter_instances, torch.device('cpu')
+            )
+            flow_downsampled = flow_full
+        else:
+            # downsample_for_cats is True: try kps_to_flow first, fallback to manual downsampling
+            if self.kps_to_flow is not None and n_valid > 0:
+                try:
+                    # Use KeypointToFlow for downsampled flow (matches other datasets like SPair, PFPascal)
+                    batch_for_flow = {
+                        'src_kps': src_kps,  # [2, max_pts]
+                        'trg_kps': trg_kps,  # [2, max_pts]
+                        'n_pts': torch.tensor(n_valid)
+                    }
+                    flow_downsampled = self.kps_to_flow(batch_for_flow)  # [2, feature_size, feature_size]
+                except Exception as e:
+                    # If kps_to_flow fails, fall back to manual downsampling
+                    if self.verbose:
+                        print(f"Warning: kps_to_flow failed ({e}), falling back to manual downsampling")
+                    flow_full = self._create_flow_field(
+                        src_trajs, trg_trajs, src_vis, trg_vis, src_valid, trg_valid,
+                        src_img.shape, src_mask, trg_mask, self.filter_instances, torch.device('cpu')
+                    )
+                    flow_downsampled = self._downsample_flow_for_cats(flow_full, self.cats_feat_size)
+            else:
+                # Fallback: create full flow and downsample (when kps_to_flow is not available or no valid points)
+                flow_full = self._create_flow_field(
+                    src_trajs, trg_trajs, src_vis, trg_vis, src_valid, trg_valid,
+                    src_img.shape, src_mask, trg_mask, self.filter_instances, torch.device('cpu')
+                )
+                flow_downsampled = self._downsample_flow_for_cats(flow_full, self.cats_feat_size)
+
+        # Get image size (images are in CHW format)
+        if src_img.ndim == 3:
+            C, H, W = src_img.shape
+            img_size_tuple = (H, W)
+        else:
+            H, W = src_img.shape[-2:]
+            img_size_tuple = (H, W)
+
+        # Get PCK threshold
+        if self.thres == 'img':
+            pckthres = torch.tensor(max(H, W), dtype=torch.float32)
+        else:
+            # Default to image size
+            pckthres = torch.tensor(max(H, W), dtype=torch.float32)
+
+        # Build output dictionary
+        if self.normalize_images:
+            # Validation format (matching TSSDataset and other evaluation datasets)
+            out = {
+                'src_img': src_img,
+                'trg_img': trg_img,
+                'flow': flow_downsampled,  # Downsampled flow [2, feature_size, feature_size]
+                'src_kps': src_kps,  # [2, max_pts]
+                'trg_kps': trg_kps,  # [2, max_pts]
+                'n_pts': torch.tensor(n_valid),
+                'pckthres': pckthres,
+                'src_imsize': img_size_tuple,
+                'trg_imsize': img_size_tuple,
+                'datalen': len(self),
+            }
+        else:
+            # Training format (original)
+            out = {
+                'src_img': src_img,
+                'trg_img': trg_img,
+                'flow': flow_downsampled,
+                'masks': masks
+            }
+
+        # All tensors are already on CPU, no need to move them
+        return out
+    
+    def __getitem_precompute__(self, index: int, worker_id: int = None):
+        """
+        Simple precomputation version - just try index and return gotit status.
+        No cache writing - results are collected in precompute script.
+        
+        Args:
+            index: Sample index to check
+            worker_id: Optional worker ID (unused, kept for compatibility)
+            
+        Returns:
+            Dict with 'index' and 'gotit' bool
+        """
+        # Try the requested index - call getitem_helper directly to avoid creating fake samples
+        # when gotit=False, which reduces memory allocation overhead
+        try:
+            sample, gotit = self.base_dataset.getitem_helper(index)
+            return {'index': index, 'gotit': gotit}
+        except Exception as e:
+            # Any error means invalid
+            return {'index': index, 'gotit': False}
+    
+    def _create_flow_field(self, 
+                          src_trajs: torch.Tensor, 
+                          trg_trajs: torch.Tensor,
+                          src_vis: torch.Tensor,
+                          trg_vis: torch.Tensor, 
+                          src_valid: torch.Tensor,
+                          trg_valid: torch.Tensor,
+                          img_shape: Tuple[int, int, int],
+                          src_mask: torch.Tensor,
+                          trg_mask: torch.Tensor,
+                          filter_instances: bool,
+                          device: torch.device) -> torch.Tensor:
+        """
+        Create a flow field from target to source.
+        
+        Args:
+            src_trajs: Source frame trajectories (N, 2)
+            trg_trajs: Target frame trajectories (N, 2)
+            src_vis: Source frame visibility (N,)
+            trg_vis: Target frame visibility (N,)
+            src_valid: Source frame validity (N,)
+            trg_valid: Target frame validity (N,)
+            img_shape: Image shape (C, H, W)
+            src_mask: Source instance mask (C, H, W)
+            trg_mask: Target instance mask (C, H, W)
+        Returns:
+            Flow field tensor (2, H, W) where flow[0] = dx, flow[1] = dy from trg to src
+        """
+        C, H, W = img_shape
+        
+        # Initialize flow field with inf (invalid) on the specified device
+        # Flow format: (2, H, W) where flow[0] = dx, flow[1] = dy
+        # Invalid pixels start as inf, which will be converted to 0 by downsampler if needed
+        # This allows proper handling of sparse flow fields
+        flow = torch.full((2, H, W), float('inf'), dtype=torch.float32, device=device)
+        
+        # Ensure masks are (H, W) instance id maps
+        if src_mask.ndim == 3:
+            src_mask = src_mask.squeeze(0)
+        if trg_mask.ndim == 3:
+            trg_mask = trg_mask.squeeze(0)
+        
+        # Find points that are visible and valid in both frames
+        valid_points = (src_vis > 0) & (trg_vis > 0) & (src_valid > 0) & (trg_valid > 0)
+        
+        if not valid_points.any():
+            return flow
+        
+        # Get valid trajectories
+        valid_src_trajs = src_trajs[valid_points]  # (M, 2) in pixel coords
+        valid_trg_trajs = trg_trajs[valid_points]  # (M, 2)
+
+        # Displacement from trg to src: [dx, dy]
+        flow_vectors = valid_src_trajs - valid_trg_trajs  # (M, 2)
+
+        # Round to nearest integer pixel positions for placement
+        x_t = torch.round(valid_trg_trajs[:, 0]).long()
+        y_t = torch.round(valid_trg_trajs[:, 1]).long()
+
+        # In-bounds mask
+        in_bounds = (x_t >= 0) & (x_t < W) & (y_t >= 0) & (y_t < H)
+
+        if in_bounds.any():
+            x_ib = x_t[in_bounds]
+            y_ib = y_t[in_bounds]
+            flow_ib = flow_vectors[in_bounds]  # (M, 2)
+
+            if filter_instances:
+                # Compute background (0) and floor/max id filtering
+                max_id = torch.max(torch.max(src_mask), torch.max(trg_mask)).item()
+                src_ok = (src_mask[y_ib, x_ib] != 0) & (src_mask[y_ib, x_ib] != max_id)
+                trg_ok = (trg_mask[y_ib, x_ib] != 0) & (trg_mask[y_ib, x_ib] != max_id)
+                keep = src_ok & trg_ok
+                if keep.any():
+                    # Assign flow vectors: flow[:, y, x] = [dx, dy] for (2, H, W) format
+                    flow[:, y_ib[keep], x_ib[keep]] = flow_ib[keep].T  # flow_ib[keep] is (K, 2), .T makes (2, K)
+            else:
+                # Assign flow vectors: flow[:, y, x] = [dx, dy] for (2, H, W) format
+                flow[:, y_ib, x_ib] = flow_ib.T  # flow_ib is (M, 2), .T makes (2, M)
+        
+        return flow
+
+    def _downsample_flow_for_cats(self, flow: torch.Tensor, feat_size: int) -> torch.Tensor:
+        """Downsample (2, H, W) flow to (2, feat_size, feat_size) normalized to feature grid units.
+        Only invalid (inf) values are excluded from averaging. Zero vectors are valid and included.
+        Flow values are normalized to feature grid units to match CATS convention:
+        - A flow of 1.0 = one feature grid cell = (H // feat_size) pixels
+        - This matches how CATS stores flow from keypoint annotations.
+        """
+        if flow is None:
+            return flow
+        _, H, W = flow.shape  # flow is (2, H, W)
+        flow_batch = flow.unsqueeze(0)  # (1, 2, H, W)
+
+        # Valid mask: only exclude infs, zeros are valid (represent zero motion)
+        # Check for finite values (includes zeros, excludes infs)
+        valid_mask = torch.isfinite(flow_batch).all(dim=1, keepdim=True)  # (1, 1, H, W)
+
+        # Set invalid values to zero for pooling (temporary, won't affect masked average)
+        flow_for_pool = flow_batch.clone()
+        flow_for_pool[~valid_mask.expand_as(flow_for_pool)] = 0
+        
+        # Calculate scale factors for converting averages to sums
+        scale_factor_h = H / feat_size
+        scale_factor_w = W / feat_size
+        
+        # Sum of valid flow values in each pooling region
+        flow_sum = torch.nn.functional.adaptive_avg_pool2d(
+            flow_for_pool, (feat_size, feat_size)
+        ) * (scale_factor_h * scale_factor_w)  # Multiply back to get sum
+        
+        # Count of valid pixels in each pooling region
+        valid_count = torch.nn.functional.adaptive_avg_pool2d(
+            valid_mask.float(), (feat_size, feat_size)
+        ) * (scale_factor_h * scale_factor_w)  # Multiply back to get count
+        
+        # Compute masked average: divide sum by count of valid pixels (not total pixels)
+        # Avoid division by zero for regions with no valid pixels
+        valid_count_safe = torch.clamp(valid_count, min=1e-8)
+        flow_ds = flow_sum / valid_count_safe
+
+        # Normalize flow to feature grid units to match CATS convention
+        # CATS expects flow in feature grid units, not pixel space
+        # A flow of 1.0 = one feature grid cell = (H // feat_size) pixels
+        # Use the same dimension for both x and y to match other datasets (FlyingThings, SPair, etc.)
+        # For square images (which PointOdyssey uses), H == W, so this is consistent
+        downsampling_factor = H // feat_size
+        flow_ds = flow_ds / downsampling_factor
+
+        # Mark regions with no valid pixels as invalid (set to 0)
+        # For sparse flow (like PointOdyssey keypoints), use a very low threshold
+        # to preserve patches that have any valid flow, even if sparse
+        # Threshold of > 0 means we keep any patch with at least some valid pixels
+        valid_mask_downsampled = valid_count > 1e-6  # Keep patches with any valid pixels
+        flow_ds[~valid_mask_downsampled.expand_as(flow_ds)] = 0
+
+        return flow_ds.squeeze(0)  # (2, feat_size, feat_size)
+
+
+    # ---- PyTorch-friendly device API ----
+    @property
+    def device(self):
+        return self._device
+
+    def to(self, device):
+        new_device = torch.device(device)
+        if self._device != new_device:
+            self._device = new_device
+        return self
+
+    def cuda(self, device=None):
+        if device is None:
+            if torch.cuda.is_available():
+                idx = torch.cuda.current_device()
+                new_device = torch.device(f'cuda:{idx}')
+            else:
+                new_device = torch.device('cuda')  # will error on use if unavailable
+        else:
+            if isinstance(device, int):
+                new_device = torch.device(f'cuda:{device}')
+            else:
+                new_device = torch.device(device)
+        if self._device != new_device:
+            self._device = new_device
+        return self
+
+    def cpu(self):
+        new_device = torch.device('cpu')
+        if self._device != new_device:
+            self._device = new_device
+        return self
+    
+    def _resize_sample(self, src_img: torch.Tensor, trg_img: torch.Tensor, 
+                      flow: torch.Tensor, size: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Resize images and flow to target size.
+        
+        Args:
+            src_img: Source image (C, H, W)
+            trg_img: Target image (C, H, W)
+            flow: Flow field (H, W, 2)
+            target_size: Target size (H, W)
+            
+        Returns:
+            Resized src_img, trg_img, flow
+        """
+        target_h, target_w = size, size
+        
+        # Resize images
+        src_img_resized = torch.nn.functional.interpolate(
+            src_img.unsqueeze(0), size=(target_h, target_w), mode='bilinear', align_corners=False
+        ).squeeze(0)
+        
+        trg_img_resized = torch.nn.functional.interpolate(
+            trg_img.unsqueeze(0), size=(target_h, target_w), mode='bilinear', align_corners=False
+        ).squeeze(0)
+        
+        # Resize flow
+        # Flow needs special handling - we need to scale the flow vectors by the resize factor
+        orig_h, orig_w = flow.shape[:2]
+        scale_x = target_w / orig_w
+        scale_y = target_h / orig_h
+        
+        # Resize flow field
+        flow_resized = torch.nn.functional.interpolate(
+            flow.permute(2, 0, 1).unsqueeze(0),  # (1, 2, H, W)
+            size=(target_h, target_w), 
+            mode='bilinear', 
+            align_corners=False
+        ).squeeze(0).permute(1, 2, 0)  # (H, W, 2)
+        
+        # Scale flow vectors by resize factors
+        flow_resized[:, :, 0] *= scale_x  # x component
+        flow_resized[:, :, 1] *= scale_y  # y component
+        
+        return src_img_resized, trg_img_resized, flow_resized
+    
+    def _create_dummy_sample(self) -> Dict[str, torch.Tensor]:
+        """Create a dummy sample when the base dataset fails."""
+        print("Creating dummy sample")
+        if self.size is not None:
+            H, W = self.size, self.size
+        else:
+            H, W = 368, 496
+            
+        return {
+            'src_img': torch.zeros((3, H, W), dtype=torch.float32, device=self._device),
+            'trg_img': torch.zeros((3, H, W), dtype=torch.float32, device=self._device),
+            'flow': torch.zeros((2, H, W), dtype=torch.float32, device=self._device),
+            'masks': torch.zeros((self.S, 1, H, W), dtype=torch.int64, device=self._device)
+        }
+    
+    def visualize_masks(self, masks: torch.Tensor, save_path: str = "./debug/class_masks_visualization.png"):
+        """
+        Visualize instance masks with distinct colors for each instance ID.
+        
+        Args:
+            masks: Instance masks tensor (S, 1, H, W) where values are instance IDs 0-k
+            save_path: Path to save the visualization
+        """
+        S, C, H, W = masks.shape
+        
+        # Create a figure with subplots for each frame
+        fig, axes = plt.subplots(2, (S + 1) // 2, figsize=(4 * ((S + 1) // 2), 8))
+        if S == 1:
+            axes = [axes]
+        elif S <= 2:
+            axes = axes.flatten()
+        else:
+            axes = axes.flatten()
+        
+        # Get unique instance IDs across all frames
+        all_instance_ids = torch.unique(masks).cpu().numpy()
+        num_instances = len(all_instance_ids)
+        
+        # Create a colormap with distinct colors
+        # Class 0 (background) gets bright red
+        colors = ['red']  # Class 0 = bright red
+        if num_instances > 1:
+            # Generate distinct colors for other classes
+            other_colors = plt.cm.tab20(np.linspace(0, 1, max(1, num_instances - 1)))
+            colors.extend([other_colors[i] for i in range(num_instances - 1)])
+        
+        # Create a custom colormap
+        cmap = mcolors.ListedColormap(colors)
+        
+        # Normalize instance IDs to [0, num_instances-1] for colormap
+        id_to_index = {instance_id: i for i, instance_id in enumerate(all_instance_ids)}
+        
+        for s in range(S):
+            mask_frame = masks[s, 0].cpu().numpy()  # (H, W)
+            
+            # Convert instance IDs to colormap indices
+            mask_colored = np.zeros_like(mask_frame, dtype=float)
+            for instance_id in all_instance_ids:
+                mask_colored[mask_frame == instance_id] = id_to_index[instance_id]
+            
+            # Plot the mask
+            im = axes[s].imshow(mask_colored, cmap=cmap, vmin=0, vmax=num_instances-1)
+            axes[s].set_title(f'Frame {s} - Instance Masks')
+            axes[s].axis('off')
+        
+        # Hide unused subplots
+        for s in range(S, len(axes)):
+            axes[s].axis('off')
+        
+        # Add colorbar
+        cbar = fig.colorbar(im, ax=axes, shrink=0.8, aspect=20)
+        cbar.set_ticks(range(num_instances))
+        cbar.set_ticklabels([f'ID {int(id)}' for id in all_instance_ids])
+        
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        print(f"Mask visualization saved to: {save_path}")
+        print(f"Found {num_instances} unique instance IDs: {all_instance_ids}")
+        print(f"Class 0 (background) is colored bright red")
+    
+    def visualize_masks_batch(self, batch_masks: torch.Tensor, save_path: str = "./debug/class_masks_batch_visualization.png"):
+        """
+        Visualize instance masks for a batch of samples.
+        
+        Args:
+            batch_masks: Batch of instance masks tensor (B, S, 1, H, W)
+            save_path: Path to save the visualization
+        """
+        B, S, C, H, W = batch_masks.shape
+        
+        # Create a figure with subplots for each sample and frame
+        fig, axes = plt.subplots(B, S, figsize=(4 * S, 4 * B))
+        if B == 1:
+            axes = axes.reshape(1, -1)
+        if S == 1:
+            axes = axes.reshape(-1, 1)
+        
+        # Get unique instance IDs across all samples and frames
+        all_instance_ids = torch.unique(batch_masks).cpu().numpy()
+        num_instances = len(all_instance_ids)
+        
+        # Create a colormap with distinct colors
+        # Class 0 (background) gets bright red
+        colors = ['red']  # Class 0 = bright red
+        if num_instances > 1:
+            # Generate distinct colors for other classes
+            other_colors = plt.cm.tab20(np.linspace(0, 1, max(1, num_instances - 1)))
+            colors.extend([other_colors[i] for i in range(num_instances - 1)])
+        
+        # Create a custom colormap
+        cmap = mcolors.ListedColormap(colors)
+        
+        # Normalize instance IDs to [0, num_instances-1] for colormap
+        id_to_index = {instance_id: i for i, instance_id in enumerate(all_instance_ids)}
+        
+        for b in range(B):
+            for s in range(S):
+                mask_frame = batch_masks[b, s, 0].cpu().numpy()  # (H, W)
+                
+                # Convert instance IDs to colormap indices
+                mask_colored = np.zeros_like(mask_frame, dtype=float)
+                for instance_id in all_instance_ids:
+                    mask_colored[mask_frame == instance_id] = id_to_index[instance_id]
+                
+                # Plot the mask
+                im = axes[b, s].imshow(mask_colored, cmap=cmap, vmin=0, vmax=num_instances-1)
+                axes[b, s].set_title(f'Sample {b}, Frame {s}')
+                axes[b, s].axis('off')
+        
+        # Add colorbar
+        cbar = fig.colorbar(im, ax=axes, shrink=0.8, aspect=20)
+        cbar.set_ticks(range(num_instances))
+        cbar.set_ticklabels([f'ID {int(id)}' for id in all_instance_ids])
+        
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=150, bbox_inches='tight')
+        plt.close()
+        
+        print(f"Batch mask visualization saved to: {save_path}")
+        print(f"Found {num_instances} unique instance IDs: {all_instance_ids}")
+        print(f"Class 0 (background) is colored bright red")
+
+
+def test_dataset_with_visualization(dataset_path: str = None, size: Optional[int] = None, downsample_for_cats: bool = False):
+    from torch.utils.data import DataLoader
+    """Test the dataset wrapper with visualization."""
+    print("Testing PointOdyssey Flow Dataset with Visualization...")
+    
+    # Default dataset path if not provided
+    if dataset_path is None:
+        dataset_path = '/home/spencer/Data/sample'
+        print(f"Using default dataset path: {dataset_path}")
+        print("To specify a different path, use: python PointOdysseyCorrespondence.py --dataset_path /path/to/pointodyssey")
+    else:
+        print(f"Using dataset path: {dataset_path}")
+    
+    # Check if dataset path exists
+    if not os.path.exists(dataset_path):
+        print(f"ERROR: Dataset path does not exist: {dataset_path}")
+        print("Please provide a valid path to the PointOdyssey dataset using --dataset_path")
+        return
+    
+    # The PointOdyssey dataset expects a 'train' subdirectory
+    # If the dataset_path points directly to sequences, we need to adjust
+    train_path = os.path.join(dataset_path, 'train')
+    if not os.path.exists(train_path):
+        print(f"Note: No 'train' subdirectory found. The dataset expects sequences to be in {train_path}")
+        print("Creating a temporary train directory structure...")
+        # We'll modify the dataset to look directly in the provided path
+        actual_dataset_path = dataset_path
+    else:
+        actual_dataset_path = dataset_path
+    
+    # Create dataset
+    dataset = PointOdysseyFlowDataset(
+        dataset_location=dataset_path,
+        dset='train',
+        use_augs=False,
+        S=4,
+        N=64,
+        quick=False,  # Use quick mode for testing
+        verbose=True,
+        filter_instances=True,
+        resize_size=(size+64, size+64),
+        crop_size=(size, size),
+        downsample_for_cats=downsample_for_cats,
+        cats_feat_size=32,
+    )
+    
+    print(f"Dataset length: {len(dataset)}")
+    
+    if len(dataset) == 0:
+        print("No samples in dataset")
+        return
+    
+    # Collect samples for batch visualization
+    batch_data = []
+    batch_masks = []
+    max_samples = 4
+    
+    for i in range(min(len(dataset), max_samples)):
+        try:
+            sample = dataset[i]
+            
+            src_img = sample['src_img']
+            trg_img = sample['trg_img']
+            
+            batch_data.append({
+                'src_img': src_img.unsqueeze(0),  # Add batch dimension
+                'trg_img': trg_img.unsqueeze(0),  # Add batch dimension
+                'flow': sample['flow'].unsqueeze(0)     # Add batch dimension
+            })
+            
+            # Collect sequence masks for visualization (expects B x S x 1 x H x W)
+            batch_masks.append(sample['masks'].unsqueeze(0))  # Add batch dimension
+            
+            print(f"Sample {i}:")
+            print(f"  Source shape: {src_img.shape}")
+            print(f"  Target shape: {trg_img.shape}")
+            print(f"  Flow shape: {sample['flow'].shape}")
+            
+            # Debug image format
+            print(f"  Source dtype: {src_img.dtype}")
+            print(f"  Source range: [{src_img.min():.2f}, {src_img.max():.2f}]")
+            
+            # Check flow statistics
+            flow = sample['flow']  # (2, H, W)
+            # Valid flow is where both components are finite
+            valid_mask = torch.isfinite(flow).all(dim=0)  # (H, W)
+            if valid_mask.any():
+                print(f"  Valid flow points: {valid_mask.sum().item()}")
+                print(f"  Flow range: x=[{flow[0][valid_mask].min():.2f}, {flow[0][valid_mask].max():.2f}], y=[{flow[1][valid_mask].min():.2f}, {flow[1][valid_mask].max():.2f}]")
+                # Sample a few valid flow vectors
+                valid_indices = torch.nonzero(valid_mask, as_tuple=False)
+                if len(valid_indices) > 0:
+                    sample_indices = valid_indices[:min(5, len(valid_indices))]
+                    sample_flows = flow[:, sample_indices[:, 0], sample_indices[:, 1]].T  # (N, 2)
+                    print(f"  Sample flow vectors: {sample_flows[:5]}")
+            else:
+                print("  No valid flow found")
+                
+        except Exception as e:
+            print(f"Error loading sample {i}: {e}")
+            continue
+    
+    if not batch_data:
+        print("No valid samples loaded")
+        return
+    
+
+    dataloader = DataLoader[Any](dataset, batch_size=4, shuffle=False)
+    batch = next(iter(dataloader))
+
+    
+    # # Visualize masks
+    # print("\nVisualizing instance masks...")
+    # dataset_instance = PointOdysseyFlowDataset(
+    #     dataset_location=dataset_path,
+    #     dset='train',
+    #     use_augs=False,
+    #     S=8,
+    #     N=32,
+    #     quick=False,
+    #     verbose=False,
+    #     resize_size=(size+64, size+64),
+    #     crop_size=(size, size),
+    #     all_points=False,
+    # )
+    # dataset_instance.visualize_masks_batch(masks_batch, "./debug/class_masks_batch_visualization.png")
+    
+    
+    try:
+        from src.data.synth.datasets.visualizers import CorrespondenceVisualizer
+        from src.data.synth.datasets.cats_flow_visualizers import CATSFlowVisualizer
+        
+        # Create visualizer
+        visualizer = CorrespondenceVisualizer(
+            figsize=(20, 15),
+            dpi=150,
+            arrow_scale=1.0,
+            arrow_density=20
+        )
+
+        cats_visualizer = CATSFlowVisualizer(
+            feat_size=32,
+            figsize=(20, 15),
+            dpi=150,
+            show_patch_boundaries=True
+        )
+
+        if downsample_for_cats:
+            batch_downsampled = {
+                'src_img': batch['src_img'],
+                'trg_img': batch['trg_img'],
+                'flow_downsampled': batch['flow']
+            }
+            cats_visualizer.visualize_downsampled_flow_batch(
+                batch_downsampled,
+                save_path="./debug/pointodyssey_flow_downsampled_side_by_side.png",
+                max_samples=len(batch_data),
+                visualization_mode='side_by_side'
+            )
+            cats_visualizer.visualize_downsampled_flow_batch(
+                batch_downsampled,
+                save_path="./debug/pointodyssey_flow_downsampled_overlay.png",
+                max_samples=len(batch_data),
+                visualization_mode='overlay'
+            )
+            
+            # Create mask-based visualization: src_img and trg_img from masks
+            if 'masks' in batch:
+                masks_batch = batch['masks']  # (batch_size, S, 1, H, W)
+                batch_size = masks_batch.shape[0]
+                num_instances = masks_batch.shape[1]
+                H, W = masks_batch.shape[3], masks_batch.shape[4]
+                
+                # Convert to numpy if needed
+                if torch.is_tensor(masks_batch):
+                    masks_np = masks_batch.cpu().numpy()
+                else:
+                    masks_np = masks_batch
+                
+                # Create mask-based images
+                src_mask_imgs = []
+                trg_mask_imgs = []
+                
+                for i in range(batch_size):
+                    # Get src mask (first frame) and trg mask (last frame)
+                    src_mask = masks_np[i, 0, 0, :, :]  # (H, W)
+                    trg_mask = masks_np[i, num_instances-1, 0, :, :]  # (H, W)
+                    
+                    # Identify background: mask value 0 (sky) or max (landscape/background)
+                    max_mask_value = np.max(masks_np[i])
+                    src_background = (src_mask == 0) | (src_mask == max_mask_value)
+                    trg_background = (trg_mask == 0) | (trg_mask == max_mask_value)
+                    
+                    # Create object masks: NOT background
+                    src_object_mask = ~src_background  # (H, W) - True where objects
+                    trg_object_mask = ~trg_background  # (H, W) - True where objects
+                    
+                    # Create RGB images: src as red, trg as green (matching overlay_background_aware pattern)
+                    src_mask_img = np.zeros((3, H, W), dtype=np.float32)
+                    src_mask_img[0] = src_object_mask.astype(np.float32)  # Red channel = src objects
+                    
+                    trg_mask_img = np.zeros((3, H, W), dtype=np.float32)
+                    trg_mask_img[1] = trg_object_mask.astype(np.float32)  # Green channel = trg objects
+                    
+                    src_mask_imgs.append(torch.from_numpy(src_mask_img))
+                    trg_mask_imgs.append(torch.from_numpy(trg_mask_img))
+                
+                # Stack into batch tensors
+                src_mask_batch = torch.stack(src_mask_imgs, dim=0)  # (batch_size, 3, H, W)
+                trg_mask_batch = torch.stack(trg_mask_imgs, dim=0)  # (batch_size, 3, H, W)
+                
+                batch_mask_overlay = {
+                    'src_img': src_mask_batch,
+                    'trg_img': trg_mask_batch,
+                    'flow_downsampled': batch['flow']
+                }
+                
+                cats_visualizer.visualize_downsampled_flow_batch(
+                    batch_mask_overlay,
+                    save_path="./debug/pointodyssey_flow_downsampled_overlay_mask.png",
+                    max_samples=len(batch_data),
+                    visualization_mode='overlay'
+                )
+            
+        else:
+            # Visualize with side-by-side layout
+            print("\nCreating side-by-side visualization...")
+            visualizer.visualize_rendered_batch(
+                batch,
+                save_path="./debug/pointodyssey_flow_side_by_side.png",
+                max_samples=len(batch_data),
+                visualization_mode='side_by_side',
+                sampling_mode='all_valid'
+            )
+
+            # Visualize with overlay_background_aware layout
+            print("Creating overlay_background_aware visualization...")
+            visualizer.visualize_rendered_batch(
+                batch,
+                save_path="./debug/pointodyssey_flow_overlay_background_aware.png",
+                max_samples=len(batch_data),
+                visualization_mode='overlay_background_aware',
+                sampling_mode='all_valid'
+            )
+
+
+        
+        print("Visualization complete! Check the generated PNG files.")
+        
+    except ImportError as e:
+        print(f"Could not import visualizer: {e}")
+        print("Skipping visualization, but dataset test completed successfully.")
+    
+    return batch
+
+
+def test_dataset():
+    """Test the dataset wrapper without visualization."""
+    print("Testing PointOdyssey Flow Dataset...")
+    
+    # Create dataset
+    dataset = PointOdysseyFlowDataset(
+        dataset_location='/home/spencer/Data/sample',
+        dset='train',
+        use_augs=False,
+        S=8,
+        N=32,
+        quick=False,  # Use quick mode for testing
+        verbose=True,
+        size=256  # Resize to 256x256 (square)
+    )
+    
+    print(f"Dataset length: {len(dataset)}")
+    
+    if len(dataset) > 0:
+        # Get a sample
+        sample = dataset[0]
+        
+        print(f"Sample keys: {sample.keys()}")
+        print(f"Source image shape: {sample['src_img'].shape}")
+        print(f"Target image shape: {sample['trg_img'].shape}")
+        print(f"Flow shape: {sample['flow'].shape}")
+        
+        # Check flow statistics
+        flow = sample['flow']  # (2, H, W)
+        # Valid flow is where both components are finite
+        valid_mask = torch.isfinite(flow).all(dim=0)  # (H, W)
+        if valid_mask.any():
+            print(f"Valid flow points: {valid_mask.sum().item()}")
+            print(f"Flow range: x=[{flow[0][valid_mask].min():.2f}, {flow[0][valid_mask].max():.2f}], y=[{flow[1][valid_mask].min():.2f}, {flow[1][valid_mask].max():.2f}]")
+        else:
+            print("No valid flow found")
+        
+        return sample
+    else:
+        print("No samples in dataset")
+        return None
+
+
+def test_mask_visualization():
+    """Test mask visualization specifically."""
+    print("Testing Mask Visualization...")
+    
+    # Create dataset
+    dataset = PointOdysseyFlowDataset(
+        dataset_location='/home/spencer/Data/sample',
+        dset='train',
+        use_augs=False,
+        S=8,
+        N=32,
+        quick=False,
+        verbose=True
+    )
+    
+    print(f"Dataset length: {len(dataset)}")
+    
+    if len(dataset) > 0:
+        # Get a sample
+        sample = dataset[0]
+        masks = sample['masks']  # Shape: (S, 1, H, W)
+        
+        print(f"Masks shape: {masks.shape}")
+        print(f"Unique instance IDs: {torch.unique(masks)}")
+        
+        # Visualize masks
+        dataset.visualize_masks(masks, "./debug/class_masks_visualization.png")
+        
+        return sample
+    else:
+        print("No samples in dataset")
+        return None
+
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='Test PointOdyssey flow dataset')
+    parser.add_argument('--dataset_path', type=str, default=None,
+                        help='Path to PointOdyssey dataset directory')
+    parser.add_argument('--size', type=int, default=None,
+                        help='Target square size for resizing (size x size)')
+    parser.add_argument('--dset', type=str, default='train',
+                        choices=['train', 'val', 'test'],
+                        help='Dataset split to use')
+    parser.add_argument('--visualize', action='store_true',
+                        help='Run with visualization')
+    parser.add_argument('--masks', action='store_true',
+                        help='Test mask visualization only')
+    parser.add_argument('--downsample_for_cats', type=bool, default=False,
+                        help='Downsample flow for CATs')
+    
+    args = parser.parse_args()
+    
+    # Use size directly if provided
+    size = args.size if args.size else None
+    
+    if args.masks:
+        # Test mask visualization only
+        sample = test_mask_visualization()
+    elif args.visualize:
+        # Test with visualization
+        batch_dict = test_dataset_with_visualization(args.dataset_path, size, args.downsample_for_cats)
+    else:
+        # Test without visualization
+        sample = test_dataset()

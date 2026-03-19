@@ -1,0 +1,44 @@
+# Base Training Configuration
+# This file contains default model and training parameters
+# These can be overridden in sweep configs or dataset-specific configs
+
+model:
+  backbone: 'resnet101'
+  freeze: false
+  pretrained_backbone: true
+
+training:
+  epochs: 5000
+  batch_size: 8
+  n_threads: 32
+  seed: 2021
+  lr: 3e-5
+  lr_backbone: 3e-6
+  weight_decay: 0.05
+  momentum: 0.9
+  scheduler: 'step'  # 'step' or 'cosine'
+  step: '[70, 80, 90]'
+  step_gamma: 0.5
+  steps_per_epoch: 100  # null = all steps, or integer. 'logarithmic' not supported with lightning
+  
+  # Validation frequency control
+  check_val_every_n_epoch: 10  # Run validation every N epochs (10 = less frequent for RC)
+  # val_check_interval: 1.0  # Alternative: run after N training steps (int) or fraction of epoch (float 0.0-1.0)
+  
+  augmentation: false
+  min_flow_length: null
+  max_flow_length: null
+  
+  # MMD calculation during validation
+  mmd_every_n_epochs: 0  # 0 = disabled, 1 = every epoch, 2 = every other epoch, etc.
+
+  enable_debug: false
+  debug_visualization_benchmarks: None
+  debug_visualization_persist: true
+
+  eval_initial: true
+
+paths:
+  snapshots: './snapshots'
+  pretrained: null  # Path to pretrained model or null
+  start_epoch: 0  # -1 for new training, or epoch number to resume

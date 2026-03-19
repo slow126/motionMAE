@@ -1,0 +1,290 @@
+Here’s a clean handoff you can give your Codex agent.
+
+⸻
+
+We want a small smoke test for motion-aware subset selection on PointOdyssey, before building any game-data plumbing.
+
+Goal
+
+Test whether curating candidate training pairs/windows using motion-aware selection beats:
+	•	random selection
+    	•	current heuristic selection
+
+        under a fixed retained-data budget.
+
+        This is a canary, not the full paper. Keep it small, offline, and easy to iterate.
+
+        Core hypothesis
+
+        Dense candidate pairs are redundant.
+        Bad stride / motion-threshold settings can produce poor training subsets.
+        A simple balanced motion-aware selector should outperform:
+        	•	random retention
+            	•	current stride+motion heuristic
+                	•	maybe simple motion novelty
+
+                    especially under smaller budgets.
+
+                    Source data
+
+                    Use an oversampled PointOdyssey candidate pool.
+
+                    We want to build a large candidate set from PointOdyssey using permissive settings, for example:
+                    	•	multiple strides
+                        	•	relaxed motion thresholds
+                            	•	maybe multiple candidate windows per trajectory
+
+                                The point is to create a redundant source pool that we later prune offline.
+
+                                Pooled eval bank
+
+                                We also want a pooled eval motion bank built from several downstream eval datasets.
+
+                                For the smoke test, keep this simple:
+                                	•	sample motion descriptors from several eval datasets
+                                    	•	merge them into one pooled target bank
+                                        	•	normalize consistently with the source descriptors
+
+                                            This pooled bank is only for the target-aware selector variants.
+
+                                            Descriptor space
+
+                                            Use the motion descriptors from the previous paper.
+
+                                            Likely start with one descriptor only for simplicity:
+                                            	•	first choice: whatever is easiest / already implemented
+                                                	•	BFV or HOF is fine
+
+                                                    Do not start with multiple descriptor families unless almost free.
+
+                                                    Selection policies
+
+                                                    Implement these offline subset policies:
+
+                                                    1. Random
+
+                                                    Uniform random subset of candidate pairs.
+
+                                                    2. Current heuristic
+
+                                                    Use the current hand-tuned pair extraction rule:
+                                                    	•	stride choice
+                                                        	•	motion threshold choice
+                                                            	•	whatever current baseline you actually use
+
+                                                                This is important because the whole motivation came from brittle heuristic settings.
+
+                                                                3. Motion novelty
+
+                                                                Select pairs based on symmetric diversity in motion space.
+                                                                Simple version:
+                                                                	•	farthest-first in descriptor space, or
+                                                                    	•	accept if distance to selected bank exceeds threshold
+
+                                                                        No pooled eval support term here.
+
+                                                                        4. Balanced motion-aware selector
+
+                                                                        This is the main proposed method.
+
+                                                                        Score candidates using:
+                                                                        	•	pooled target support
+                                                                            	•	motion novelty / breadth
+                                                                                	•	redundancy control
+
+                                                                                    Simple conceptual form:
+
+                                                                                    score(x) = lambda_support * support(x)
+                                                                                    + lambda_novelty * novelty(x)
+                                                                                    - lambda_redundancy * redundancy(x)
+
+                                                                                    For the smoke test, keep this implementation simple and greedy.
+
+                                                                                    Recommended support definition
+
+                                                                                    For the balanced selector, define support roughly as:
+                                                                                    	•	candidate covers pooled eval points that are currently undercovered by selected training subset
+
+                                                                                        Approximation is fine. It does not need to be mathematically fancy yet.
+
+                                                                                        For example:
+                                                                                        	•	find nearest pooled eval descriptors to candidate
+                                                                                            	•	reward candidate if it is close to pooled eval regions not yet well covered by current selected bank
+
+                                                                                                Recommended novelty definition
+
+                                                                                                Use simple motion-space novelty:
+                                                                                                	•	distance to nearest selected training descriptor
+                                                                                                    	•	or farthest-first style greedy coverage
+
+                                                                                                        Recommended redundancy definition
+
+                                                                                                        Can be simple:
+                                                                                                        	•	same as negative nearest-neighbor distance to selected bank
+                                                                                                            	•	or just rely on novelty thresholding if you want to avoid an extra term
+
+                                                                                                                Budgets
+
+                                                                                                                Use exactly three subset budgets:
+                                                                                                                	•	5%
+                                                                                                                    	•	15%
+                                                                                                                        	•	30%
+
+                                                                                                                            of the oversampled candidate pool
+
+                                                                                                                            If absolute counts are easier, that is also fine, but keep three levels:
+                                                                                                                            	•	low
+                                                                                                                                	•	medium
+                                                                                                                                    	•	high
+
+                                                                                                                                        Run grid
+
+                                                                                                                                        Main smoke-test grid
+
+                                                                                                                                        Run these methods at each budget:
+                                                                                                                                        	•	Random
+                                                                                                                                            	•	Current heuristic
+                                                                                                                                                	•	Motion novelty
+                                                                                                                                                    	•	Balanced
+
+                                                                                                                                                        This gives 4 x 3 = 12 training runs.
+
+                                                                                                                                                        Optional follow-up diagnostic
+
+                                                                                                                                                        At the medium budget only, compare:
+                                                                                                                                                        	•	Pooled support only
+                                                                                                                                                            	•	Balanced without pooled eval bank
+                                                                                                                                                                	•	Balanced with pooled eval bank
+
+                                                                                                                                                                    This is only for diagnosis if the first grid looks promising.
+
+                                                                                                                                                                    Training protocol
+
+                                                                                                                                                                    Use the same model and training recipe for all runs.
+
+                                                                                                                                                                    Do not change:
+                                                                                                                                                                    	•	architecture
+                                                                                                                                                                        	•	optimizer
+                                                                                                                                                                            	•	augmentation
+                                                                                                                                                                                	•	number of steps / epochs
+                                                                                                                                                                                    	•	batch size
+                                                                                                                                                                                        	•	evaluation code
+
+                                                                                                                                                                                            The only thing changing should be the selected training subset.
+
+                                                                                                                                                                                            Keep this as controlled as possible.
+
+                                                                                                                                                                                            Evaluation
+
+                                                                                                                                                                                            Evaluate all trained models on the same downstream eval suite.
+
+                                                                                                                                                                                            We want:
+
+                                                                                                                                                                                            Main metric
+
+                                                                                                                                                                                            Use the normal downstream correspondence metric already used in the project.
+
+                                                                                                                                                                                            Also report
+                                                                                                                                                                                            	•	performance vs retained subset budget
+                                                                                                                                                                                                	•	maybe support coverage of pooled eval bank
+                                                                                                                                                                                                    	•	maybe average NN distance / redundancy of retained subset
+
+                                                                                                                                                                                                        But the most important output is:
+                                                                                                                                                                                                        	•	downstream performance under fixed subset budgets
+
+                                                                                                                                                                                                            Expected outputs
+
+                                                                                                                                                                                                            We want tables/plots like:
+
+                                                                                                                                                                                                            Table 1
+
+                                                                                                                                                                                                            Performance by method and budget
+
+                                                                                                                                                                                                            | method | 5% | 15% | 30% |
+
+                                                                                                                                                                                                            Table 2 or diagnostics
+
+                                                                                                                                                                                                            Subset statistics
+
+                                                                                                                                                                                                            | method | budget | num_pairs | pooled_support_coverage | avg_nn_distance |
+
+                                                                                                                                                                                                            Plot
+
+                                                                                                                                                                                                            Performance vs retained budget curve for:
+                                                                                                                                                                                                            	•	Random
+                                                                                                                                                                                                                	•	Heuristic
+                                                                                                                                                                                                                    	•	Motion novelty
+                                                                                                                                                                                                                        	•	Balanced
+
+                                                                                                                                                                                                                            Success criteria
+
+                                                                                                                                                                                                                            This smoke test is successful if we see something like:
+                                                                                                                                                                                                                            	•	random is weakest
+                                                                                                                                                                                                                                	•	heuristic is brittle or inconsistent
+                                                                                                                                                                                                                                    	•	motion novelty helps over random
+                                                                                                                                                                                                                                        	•	balanced is best overall, especially on pooled evaluation
+
+                                                                                                                                                                                                                                            We do not need to beat “train on everything” in this first canary.
+                                                                                                                                                                                                                                            We only need evidence that principled subset selection is better than naive subset selection.
+
+                                                                                                                                                                                                                                            Implementation priority
+
+                                                                                                                                                                                                                                            Please do this in order:
+
+                                                                                                                                                                                                                                            Phase 1
+                                                                                                                                                                                                                                            	•	build oversampled PointOdyssey candidate pool
+                                                                                                                                                                                                                                                	•	compute motion descriptors for all candidates
+                                                                                                                                                                                                                                                    	•	compute pooled eval descriptor bank
+                                                                                                                                                                                                                                                        	•	implement offline subset selection for Random / Heuristic / Motion novelty / Balanced
+
+                                                                                                                                                                                                                                                            Phase 2
+                                                                                                                                                                                                                                                            	•	inspect selected subsets before training
+                                                                                                                                                                                                                                                                	•	dump subset stats and a few qualitative summaries
+                                                                                                                                                                                                                                                                    	•	verify budgets and descriptor distributions look reasonable
+
+                                                                                                                                                                                                                                                                        Phase 3
+                                                                                                                                                                                                                                                                        	•	launch training runs for the 12-run main grid
+                                                                                                                                                                                                                                                                            	•	collect downstream metrics
+                                                                                                                                                                                                                                                                                	•	generate one comparison table and one budget curve
+
+                                                                                                                                                                                                                                                                                    Strong constraints
+
+                                                                                                                                                                                                                                                                                    Keep this small.
+                                                                                                                                                                                                                                                                                    Do not:
+                                                                                                                                                                                                                                                                                    	•	add many descriptor variants
+                                                                                                                                                                                                                                                                                        	•	add many hyperparameter sweeps
+                                                                                                                                                                                                                                                                                            	•	add many selection heuristics
+                                                                                                                                                                                                                                                                                                	•	add many source-pool generation variants
+
+                                                                                                                                                                                                                                                                                                    This is a smoke test, not the full paper.
+
+                                                                                                                                                                                                                                                                                                    Suggested experiment names
+
+                                                                                                                                                                                                                                                                                                    Use clear run names like:
+                                                                                                                                                                                                                                                                                                    	•	smoke_random_b05
+                                                                                                                                                                                                                                                                                                        	•	smoke_random_b15
+                                                                                                                                                                                                                                                                                                            	•	smoke_random_b30
+                                                                                                                                                                                                                                                                                                                	•	smoke_heuristic_b05
+                                                                                                                                                                                                                                                                                                                    	•	smoke_novelty_b05
+                                                                                                                                                                                                                                                                                                                        	•	smoke_balanced_b05
+
+                                                                                                                                                                                                                                                                                                                            and so on.
+
+                                                                                                                                                                                                                                                                                                                            Deliverables
+
+                                                                                                                                                                                                                                                                                                                            We want the agent to produce:
+                                                                                                                                                                                                                                                                                                                            	1.	code to build the oversampled candidate pool
+                                                                                                                                                                                                                                                                                                                                	2.	code to compute/store descriptors
+                                                                                                                                                                                                                                                                                                                                    	3.	code to build pooled eval bank
+                                                                                                                                                                                                                                                                                                                                        	4.	code to select subsets offline under fixed budgets
+                                                                                                                                                                                                                                                                                                                                            	5.	config or scripts to train on each subset
+                                                                                                                                                                                                                                                                                                                                                	6.	summary CSV of all results
+                                                                                                                                                                                                                                                                                                                                                    	7.	one simple comparison plot
+
+                                                                                                                                                                                                                                                                                                                                                        ⸻
+
+                                                                                                                                                                                                                                                                                                                                                        If you want, I can also rewrite this into a more literal engineering task list with sections like:
+                                                                                                                                                                                                                                                                                                                                                        	•	files to create
+                                                                                                                                                                                                                                                                                                                                                            	•	CLI entrypoints
+                                                                                                                                                                                                                                                                                                                                                                	•	expected CSV schemas
+                                                                                                                                                                                                                                                                                                                                                                    	•	suggested function signatures

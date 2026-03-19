@@ -1,0 +1,24 @@
+# PFPascal Dataset Configuration for Fingerprinting
+
+dataset_name: pfpascal
+dataset_type: real
+
+# Dataset paths (override via command line or environment)
+paths:
+  datapath: ./models/Datasets_CATs  # Path to real datasets directory
+
+# Dataset initialization parameters
+dataset_params:
+  split: val  # trn, val, test (real datasets typically use val for evaluation)
+  thres: img  # auto, img, bbox, bbox-kp
+  feature_size: 32  # Feature size for downsampled flow
+  augmentation: false  # No augmentation for fingerprinting
+
+# Processing options (can override defaults from fingerprint_config.yaml)
+processing:
+  max_samples: null  # null = process all samples
+  use_dataloader: false
+  batch_size: 1
+  num_workers: 0
+  track_temporal: false  # Real datasets are typically single-frame pairs
+
