@@ -43,7 +43,7 @@ class FlowMAELightningModule(pl.LightningModule):
 
     @staticmethod
     def flow_to_rgb(flow: torch.Tensor) -> torch.Tensor:
-        flow = torch.nan_to_num(flow, nan=0.0, posinf=0.0, neginf=0.0)
+        flow = torch.nan_to_num(flow, nan=0.0, posinf=0.0, neginf=0.0).float()
         u, v = flow[0], flow[1]
         finite = torch.cat([u.reshape(-1), v.reshape(-1)])
         finite = finite[torch.isfinite(finite)]
