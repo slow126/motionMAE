@@ -23,4 +23,5 @@ if [[ -n "${FLOW_MAE_CONDA_ENV:-}" ]]; then
 fi
 
 cd "$REPO_ROOT"
-python3 -u scripts/train_flow_mae.py --config "$CONFIG_PATH" | tee "$LOG_DIR/flow_mae_vits_long_${SLURM_JOB_ID}.log"
+srun --unbuffered --output="$LOG_DIR/flow_mae_vits_long_${SLURM_JOB_ID}.log" \
+  python3 -u scripts/train_flow_mae.py --config "$CONFIG_PATH"
