@@ -25,34 +25,73 @@ def materialize_probe_manifest(
     output_manifest_path: str,
     num_samples: int,
     subset_indices_path: Optional[str] = None,
+    min_valid_points: Optional[int] = None,
+    max_pairs_per_sequence: Optional[int] = None,
 ) -> str:
     source_manifest = Path(source_manifest_path)
     output_manifest = Path(output_manifest_path)
     output_manifest.parent.mkdir(parents=True, exist_ok=True)
 
     num_samples = max(1, int(num_samples))
-    if subset_indices_path is not None:
+    use_subset = subset_indices_path is not None
+    if use_subset:
         with Path(subset_indices_path).open("r", encoding="utf-8") as handle:
             subset_data = json.load(handle)
         if isinstance(subset_data, dict):
             subset_data = subset_data.get("indices", subset_data.get("subset", []))
-        selected_indices = [int(v) for v in subset_data[:num_samples]]
+        selected_indices = [int(v) for v in subset_data]
     else:
-        selected_indices = list(range(num_samples))
+        selected_indices = []
 
-    selected_indices = sorted(set(idx for idx in selected_indices if idx >= 0))
-    if not selected_indices:
+    seen = set()
+    ordered_indices = []
+    for idx in selected_indices:
+        if idx < 0 or idx in seen:
+            continue
+        seen.add(idx)
+        ordered_indices.append(idx)
+    selected_indices = ordered_indices
+    if use_subset and not selected_indices:
         raise RuntimeError("No valid probe manifest indices selected.")
 
     selected_set = set(selected_indices)
+    selected_lookup = {idx: rank for rank, idx in enumerate(selected_indices)}
+    min_valid_points = None if min_valid_points is None else max(0, int(min_valid_points))
+    max_pairs_per_sequence = None if max_pairs_per_sequence is None else max(1, int(max_pairs_per_sequence))
+
     written = 0
-    with source_manifest.open("r", encoding="utf-8") as src, output_manifest.open("w", encoding="utf-8") as dst:
+    matched_rows: dict[int, str] = {}
+    seq_counts: dict[str, int] = {}
+    with source_manifest.open("r", encoding="utf-8") as src:
         for line_idx, line in enumerate(src):
-            if line_idx not in selected_set:
+            if use_subset and line_idx not in selected_set:
                 continue
-            dst.write(line)
+            row = json.loads(line)
+            if min_valid_points is not None:
+                row_valid_points = row.get("valid_points", 0)
+                try:
+                    row_valid_points = int(row_valid_points)
+                except (TypeError, ValueError):
+                    row_valid_points = 0
+                if row_valid_points < min_valid_points:
+                    continue
+            if max_pairs_per_sequence is not None:
+                seq_key = str(row.get("seq_rel_path", row.get("seq_path", row.get("seq_id", ""))))
+                if seq_counts.get(seq_key, 0) >= max_pairs_per_sequence:
+                    continue
+                seq_counts[seq_key] = seq_counts.get(seq_key, 0) + 1
+            if use_subset:
+                matched_rows[selected_lookup[line_idx]] = line
+            else:
+                matched_rows[len(matched_rows)] = line
+            if len(matched_rows) >= num_samples:
+                break
+
+    with output_manifest.open("w", encoding="utf-8") as dst:
+        for rank in sorted(matched_rows):
+            dst.write(matched_rows[rank])
             written += 1
-            if written >= len(selected_indices):
+            if written >= num_samples:
                 break
 
     if written == 0:

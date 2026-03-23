@@ -68,14 +68,15 @@ data:
 pointodyssey_probe:
   enabled: true
   source_manifest_path: analysis/pointodyssey_pairs_smoke/manifest.jsonl
-  subset_indices_path: analysis/pointodyssey_pairs_smoke/subset_random_30_seed2021.json
+  subset_indices_path: null
   pointodyssey_root: /home/slow1/Data/PointOdyssey
   num_samples: 8
   batch_size: 4
   num_workers: 0
   reverse_flow: false
   trust_manifest: true
-  min_valid_points: 8
+  min_valid_points: 1024
+  max_pairs_per_sequence: 3
 
 paths:
   snapshots: ./snapshots
