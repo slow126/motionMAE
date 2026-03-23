@@ -237,6 +237,7 @@ class PointOdysseyFlowSmokeDataset(Dataset):
         trg_img = self._read_rgb(seq_path / "rgbs" / f"rgb_{trg_frame:05d}.jpg")
 
         source_h, source_w = src_img.shape[1], src_img.shape[2]
+        original_h, original_w = source_h, source_w
         target_size = self.size
         if target_size is not None:
             target_h, target_w = target_size
@@ -271,7 +272,7 @@ class PointOdysseyFlowSmokeDataset(Dataset):
         trg_valid = np.asarray(valids[trg_frame], dtype=np.float32) > 0
         valid = src_valid & trg_valid
 
-        valid = self._normalize_mask(src_kps_np, trg_kps_np, source_h, source_w) & valid
+        valid = self._normalize_mask(src_kps_np, trg_kps_np, original_h, original_w) & valid
 
         if visibs is not None and not self.trust_manifest:
             src_vis = np.asarray(visibs[src_frame], dtype=np.float32)
