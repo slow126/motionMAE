@@ -353,7 +353,7 @@ class FlowMaskedAutoencoderViT(nn.Module):
             "patch_mask": patch_mask,
             "masked_pixels": masked_pixels,
             "observed_pixels": observed_pixels,
-            "observed_valid": observed_valid[:, 0],
+            "observed_valid": observed_valid,
             "flow_input": flow_input[:, :2],
             "encoded_tokens": encoded,
         }

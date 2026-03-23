@@ -104,6 +104,7 @@ def main() -> None:
         pointodyssey_probe_config = dict(pointodyssey_probe_config)
         pointodyssey_probe_config["manifest_path"] = materialized_probe_manifest
         pointodyssey_probe_config.pop("source_manifest_path", None)
+        pointodyssey_probe_config.pop("subset_indices_path", None)
         pointodyssey_probe_config.pop("enabled", None)
         pointodyssey_probe_config.setdefault("image_size", data_config.get("image_size", [256, 256]))
         pointodyssey_probe_config.setdefault("normalize_rgb", data_config.get("normalize_rgb", True))

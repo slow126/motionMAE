@@ -366,4 +366,5 @@ class PointOdysseyProbeDataset(Dataset):
             "flow": flow,
             "valid": valid.float(),
             "flow_scale": torch.tensor(float(self.flow_scale), dtype=torch.float32),
+            "observed_valid_override": valid.float(),
         }
