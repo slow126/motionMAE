@@ -2,7 +2,8 @@ experiment:
   name: flyingthings_flow_mae_vits
   description: >-
     One-GPU masked flow MAE run on FlyingThings only. RGB stays visible, flow observations are
-    Point Odyssey-like sparse/speckled, and TensorBoard is enabled by default.
+    Point Odyssey-like sparse/speckled with additional patch masking, and TensorBoard is enabled
+    by default.
 
 model:
   image_size: 256
@@ -20,8 +21,8 @@ model:
   dropout: 0.0
   attention_dropout: 0.0
   mask_ratio: 0.75
-  observation_mask_mode: speckle
-  speckle_keep_ratio: 0.05
+  observation_mask_mode: mixed
+  speckle_keep_ratio: 0.20
   speckle_dilation_kernel: 1
   loss: smooth_l1
   smooth_l1_beta: 1.0
