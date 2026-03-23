@@ -1,0 +1,84 @@
+experiment:
+  name: flyingthings_flow_mae_vits_long
+  description: >-
+    Long-running one-GPU masked flow MAE run on FlyingThings only. RGB stays visible, flow
+    observations use mixed speckle plus patch masking, Point Odyssey qualitative probe logging is
+    enabled, and the optimization schedule is stretched for a 36-hour RC job.
+
+model:
+  image_size: 256
+  patch_size: 16
+  rgb_channels: 6
+  flow_channels: 2
+  valid_channels: 1
+  encoder_dim: 512
+  encoder_depth: 10
+  encoder_heads: 8
+  mlp_ratio: 4.0
+  decoder_dim: 384
+  decoder_depth: 4
+  decoder_heads: 8
+  dropout: 0.0
+  attention_dropout: 0.0
+  mask_ratio: 0.75
+  observation_mask_mode: mixed
+  speckle_keep_ratio: 0.20
+  speckle_dilation_kernel: 1
+  loss: smooth_l1
+  smooth_l1_beta: 1.0
+
+training:
+  seed: 2021
+  max_epochs: 200
+  lr: 7.5e-5
+  min_lr: 1.0e-6
+  warmup_epochs: 5
+  weight_decay: 0.05
+  gradient_clip_val: 0.5
+  log_every_n_steps: 25
+  tb_log_images: 4
+  pointodyssey_probe_log_images: 4
+  num_sanity_val_steps: 2
+  precision: 32-true
+  devices: 1
+  allow_tf32: true
+  cudnn_benchmark: true
+  float32_matmul_precision: high
+
+data:
+  root: /home/slow1/Data/FlyingThings3D_Pytorch
+  train_split: train
+  val_split: test
+  pass_name: clean
+  camera: left
+  image_size: [256, 256]
+  reverse_flow: false
+  normalize_rgb: true
+  batch_size: 16
+  val_batch_size: 16
+  num_workers: 24
+  prefetch_factor: 4
+  pin_memory: true
+  persistent_workers: true
+  drop_last: true
+  normalize_flow: true
+  flow_scale: null
+  max_flow_magnitude: null
+  max_flow_magnitude_multiplier: 2.0
+
+pointodyssey_probe:
+  enabled: true
+  source_manifest_path: analysis/pointodyssey_pairs_smoke/manifest.jsonl
+  subset_indices_path: null
+  pointodyssey_root: /home/slow1/Data/PointOdyssey
+  num_samples: 8
+  batch_size: 4
+  num_workers: 0
+  prefetch_factor: null
+  reverse_flow: false
+  trust_manifest: true
+  min_valid_points: 1024
+  max_pairs_per_sequence: 3
+
+paths:
+  snapshots: ./snapshots

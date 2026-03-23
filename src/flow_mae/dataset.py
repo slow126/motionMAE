@@ -114,6 +114,7 @@ class FlyingThingsFlowMAEConfig:
     batch_size: int = 16
     val_batch_size: int = 16
     num_workers: int = 8
+    prefetch_factor: Optional[int] = None
     pin_memory: bool = True
     persistent_workers: bool = True
     drop_last: bool = True
@@ -130,6 +131,7 @@ class PointOdysseyProbeConfig:
     num_samples: int = 8
     batch_size: int = 4
     num_workers: int = 0
+    prefetch_factor: Optional[int] = None
     image_size: Sequence[int] = (256, 256)
     reverse_flow: bool = False
     normalize_rgb: bool = True
@@ -312,6 +314,9 @@ class FlyingThingsFlowMAEDataModule(pl.LightningDataModule):
         if self.train_dataset is None:
             raise RuntimeError("train dataset is not initialized")
         num_workers = int(self.config.num_workers)
+        kwargs = {}
+        if num_workers > 0 and self.config.prefetch_factor is not None:
+            kwargs["prefetch_factor"] = int(self.config.prefetch_factor)
         return DataLoader(
             self.train_dataset,
             batch_size=int(self.config.batch_size),
@@ -320,12 +325,16 @@ class FlyingThingsFlowMAEDataModule(pl.LightningDataModule):
             pin_memory=bool(self.config.pin_memory),
             persistent_workers=bool(num_workers > 0 and self.config.persistent_workers),
             drop_last=bool(self.config.drop_last),
+            **kwargs,
         )
 
     def val_dataloader(self) -> DataLoader:
         if self.val_dataset is None:
             raise RuntimeError("val dataset is not initialized")
         num_workers = int(self.config.num_workers)
+        kwargs = {}
+        if num_workers > 0 and self.config.prefetch_factor is not None:
+            kwargs["prefetch_factor"] = int(self.config.prefetch_factor)
         return DataLoader(
             self.val_dataset,
             batch_size=int(self.config.val_batch_size),
@@ -334,12 +343,16 @@ class FlyingThingsFlowMAEDataModule(pl.LightningDataModule):
             pin_memory=bool(self.config.pin_memory),
             persistent_workers=bool(num_workers > 0 and self.config.persistent_workers),
             drop_last=False,
+            **kwargs,
         )
 
     def get_pointodyssey_probe_dataloader(self) -> Optional[DataLoader]:
         if self.pointodyssey_probe_dataset is None or self.pointodyssey_probe_config is None:
             return None
         num_workers = int(self.pointodyssey_probe_config.num_workers)
+        kwargs = {}
+        if num_workers > 0 and self.pointodyssey_probe_config.prefetch_factor is not None:
+            kwargs["prefetch_factor"] = int(self.pointodyssey_probe_config.prefetch_factor)
         return DataLoader(
             self.pointodyssey_probe_dataset,
             batch_size=int(self.pointodyssey_probe_config.batch_size),
@@ -348,6 +361,7 @@ class FlyingThingsFlowMAEDataModule(pl.LightningDataModule):
             pin_memory=bool(self.config.pin_memory),
             persistent_workers=bool(num_workers > 0 and self.config.persistent_workers),
             drop_last=False,
+            **kwargs,
         )
 
 
