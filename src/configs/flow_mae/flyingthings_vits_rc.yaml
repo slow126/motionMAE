@@ -61,7 +61,7 @@ data:
   persistent_workers: true
   drop_last: true
   normalize_flow: true
-  flow_scale: 128.0
+  flow_scale: null
   max_flow_magnitude: null
   max_flow_magnitude_multiplier: 2.0
 

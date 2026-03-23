@@ -67,6 +67,10 @@ class FlowMAELightningModule(pl.LightningModule):
         return (image * std + mean).clamp(0.0, 1.0)
 
     @staticmethod
+    def mask_rgb_black(image: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        return image * mask.to(device=image.device, dtype=image.dtype).unsqueeze(0)
+
+    @staticmethod
     def endpoint_error(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         safe_target = torch.where(mask.unsqueeze(1) > 0, target, pred.detach())
         epe = torch.linalg.vector_norm(pred - safe_target, dim=1)
@@ -232,10 +236,14 @@ class FlowMAELightningModule(pl.LightningModule):
     def _build_figure(self, idx: int) -> plt.Figure:
         src_rgb = self.denormalize_rgb(self.example_batch["src_rgb"][idx])
         tgt_rgb = self.denormalize_rgb(self.example_batch["tgt_rgb"][idx])
-        input_rgb = self.flow_to_rgb(self.example_batch["flow_input"][idx])
+        observed_valid = self.example_batch["observed_valid"][idx]
+        input_rgb = self.mask_rgb_black(
+            self.flow_to_rgb(self.example_batch["flow_input"][idx]),
+            observed_valid,
+        )
         gt_rgb = self.flow_to_rgb(self.example_batch["flow"][idx])
         pred_rgb = self.flow_to_rgb(self.example_batch["pred_flow"][idx])
-        valid_rgb = self.example_batch["observed_valid"][idx].unsqueeze(0).repeat(3, 1, 1)
+        valid_rgb = observed_valid.unsqueeze(0).repeat(3, 1, 1)
 
         fig, axes = plt.subplots(2, 3, figsize=(12, 8), dpi=130)
         panels = [
@@ -258,7 +266,10 @@ class FlowMAELightningModule(pl.LightningModule):
     def _build_probe_figure(self, example: dict[str, torch.Tensor]) -> plt.Figure:
         src_rgb = self.denormalize_rgb(example["src_rgb"])
         tgt_rgb = self.denormalize_rgb(example["tgt_rgb"])
-        input_rgb = self.flow_to_rgb(example["flow_input"])
+        input_rgb = self.mask_rgb_black(
+            self.flow_to_rgb(example["flow_input"]),
+            example["observed_valid"],
+        )
         pred_rgb = self.flow_to_rgb(example["pred_flow"])
         valid_rgb = example["observed_valid"].unsqueeze(0).repeat(3, 1, 1)
 
