@@ -76,6 +76,15 @@ def main() -> None:
     run_dir = make_run_dir(config, args.config)
     with open(run_dir / "config.yaml", "w", encoding="utf-8") as handle:
         yaml.safe_dump(config, handle, sort_keys=False)
+    print(f"[train_flow_mae] run_dir={run_dir}")
+    print(
+        "[train_flow_mae] "
+        f"precision={training_config.get('precision')} "
+        f"lr={training_config.get('lr')} "
+        f"batch_size={data_config.get('batch_size')} "
+        f"normalize_flow={data_config.get('normalize_flow', True)} "
+        f"flow_scale={data_config.get('flow_scale', 'auto')}"
+    )
 
     datamodule = FlyingThingsFlowMAEDataModule(
         FlyingThingsFlowMAEConfig(**data_config)

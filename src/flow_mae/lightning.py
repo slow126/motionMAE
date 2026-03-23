@@ -71,18 +71,41 @@ class FlowMAELightningModule(pl.LightningModule):
         denom = mask.sum().clamp_min(1.0)
         return (epe * mask).sum() / denom
 
+    @staticmethod
+    def _pixel_space_flow(flow: torch.Tensor, flow_scale: torch.Tensor | None) -> torch.Tensor:
+        if flow_scale is None:
+            return flow
+        return flow * flow_scale.view(-1, 1, 1, 1).to(device=flow.device, dtype=flow.dtype)
+
     def _shared_step(self, batch: dict[str, torch.Tensor], stage: str) -> torch.Tensor:
         outputs = self(batch)
         pred_flow = outputs["pred_flow"]
+        flow_scale = batch.get("flow_scale")
         valid = batch["valid"]
         masked_pixels = outputs["masked_pixels"] * valid
         observed_pixels = outputs["observed_pixels"] * valid
+        pred_flow_px = self._pixel_space_flow(pred_flow, flow_scale)
+        target_flow_px = self._pixel_space_flow(batch["flow"], flow_scale)
+        input_flow_px = self._pixel_space_flow(outputs["flow_input"], flow_scale)
 
-        epe = self.endpoint_error(pred_flow, batch["flow"], valid)
-        masked_epe = self.endpoint_error(pred_flow, batch["flow"], masked_pixels)
-        observed_epe = self.endpoint_error(pred_flow, batch["flow"], observed_pixels)
+        if not torch.isfinite(pred_flow).all() or not torch.isfinite(outputs["loss"]):
+            pred_finite = torch.isfinite(pred_flow)
+            raise RuntimeError(
+                f"Non-finite tensors in {stage} step: "
+                f"loss={float(outputs['loss'].detach().cpu()) if torch.numel(outputs['loss']) else 'nan'}, "
+                f"pred_finite_frac={float(pred_finite.float().mean().detach().cpu()):.6f}, "
+                f"input_abs_max={float(input_flow_px.abs().max().detach().cpu()):.4f}, "
+                f"target_abs_max={float(target_flow_px.abs().max().detach().cpu()):.4f}"
+            )
+
+        epe = self.endpoint_error(pred_flow_px, target_flow_px, valid)
+        masked_epe = self.endpoint_error(pred_flow_px, target_flow_px, masked_pixels)
+        observed_epe = self.endpoint_error(pred_flow_px, target_flow_px, observed_pixels)
         mask_ratio = masked_pixels.sum() / valid.sum().clamp_min(1.0)
         latent_norm = outputs["encoded_tokens"].norm(dim=-1).mean()
+        pred_abs_max = pred_flow_px.abs().max()
+        target_abs_max = target_flow_px.abs().max()
+        input_abs_max = input_flow_px.abs().max()
 
         self.log(f"{stage}/loss", outputs["loss"], prog_bar=stage == "train", on_step=stage == "train", on_epoch=True, batch_size=batch["flow"].shape[0])
         self.log(f"{stage}_loss", outputs["loss"], prog_bar=False, on_step=False, on_epoch=True, batch_size=batch["flow"].shape[0])
@@ -92,15 +115,18 @@ class FlowMAELightningModule(pl.LightningModule):
         self.log(f"{stage}/observed_epe", observed_epe, on_step=False, on_epoch=True, batch_size=batch["flow"].shape[0])
         self.log(f"{stage}/mask_ratio", mask_ratio, on_step=False, on_epoch=True, batch_size=batch["flow"].shape[0])
         self.log(f"{stage}/latent_norm", latent_norm, on_step=False, on_epoch=True, batch_size=batch["flow"].shape[0])
+        self.log(f"{stage}/pred_abs_max", pred_abs_max, on_step=False, on_epoch=True, batch_size=batch["flow"].shape[0])
+        self.log(f"{stage}/target_abs_max", target_abs_max, on_step=False, on_epoch=True, batch_size=batch["flow"].shape[0])
+        self.log(f"{stage}/input_abs_max", input_abs_max, on_step=False, on_epoch=True, batch_size=batch["flow"].shape[0])
 
         if stage == "val" and self.example_batch is None:
             self.example_batch = {
                 "src_rgb": batch["src_rgb"].detach().cpu(),
                 "tgt_rgb": batch["tgt_rgb"].detach().cpu(),
-                "flow": batch["flow"].detach().cpu(),
+                "flow": target_flow_px.detach().cpu(),
                 "valid": batch["valid"].detach().cpu(),
-                "pred_flow": pred_flow.detach().cpu(),
-                "flow_input": outputs["flow_input"].detach().cpu(),
+                "pred_flow": pred_flow_px.detach().cpu(),
+                "flow_input": input_flow_px.detach().cpu(),
                 "observed_valid": outputs["observed_valid"].detach().cpu(),
             }
 

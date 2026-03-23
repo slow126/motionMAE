@@ -32,6 +32,8 @@ class FlyingThingsFlowMAEConfig:
     pin_memory: bool = True
     persistent_workers: bool = True
     drop_last: bool = True
+    normalize_flow: bool = True
+    flow_scale: Optional[float] = None
 
 
 class FlyingThingsFlowMAEDataset(Dataset):
@@ -44,6 +46,8 @@ class FlyingThingsFlowMAEDataset(Dataset):
         camera: str = "left",
         reverse_flow: bool = False,
         normalize_rgb: bool = True,
+        normalize_flow: bool = True,
+        flow_scale: Optional[float] = None,
     ) -> None:
         super().__init__()
         self.dataset = FlyingThings3D(
@@ -55,6 +59,9 @@ class FlyingThingsFlowMAEDataset(Dataset):
         self.image_size = (int(image_size[0]), int(image_size[1]))
         self.reverse_flow = bool(reverse_flow)
         self.normalize_rgb = bool(normalize_rgb)
+        self.normalize_flow = bool(normalize_flow)
+        scale_value = flow_scale
+        self.flow_scale = float(scale_value) if scale_value is not None else float(max(self.image_size))
 
     def __len__(self) -> int:
         return len(self.dataset)
@@ -111,6 +118,9 @@ class FlyingThingsFlowMAEDataset(Dataset):
         tgt_rgb = self._resize_rgb(tgt_rgb)
         flow, valid = self._resize_flow_and_valid(flow, valid)
 
+        if self.normalize_flow and self.flow_scale > 0:
+            flow = flow / self.flow_scale
+
         if self.normalize_rgb:
             src_rgb = normalize(src_rgb, mean=IMAGENET_MEAN, std=IMAGENET_STD)
             tgt_rgb = normalize(tgt_rgb, mean=IMAGENET_MEAN, std=IMAGENET_STD)
@@ -120,6 +130,7 @@ class FlyingThingsFlowMAEDataset(Dataset):
             "tgt_rgb": tgt_rgb,
             "flow": flow,
             "valid": valid.float(),
+            "flow_scale": torch.tensor(float(self.flow_scale), dtype=torch.float32),
         }
 
 
@@ -140,6 +151,8 @@ class FlyingThingsFlowMAEDataModule(pl.LightningDataModule):
                 camera=self.config.camera,
                 reverse_flow=self.config.reverse_flow,
                 normalize_rgb=self.config.normalize_rgb,
+                normalize_flow=self.config.normalize_flow,
+                flow_scale=self.config.flow_scale,
             )
             self.val_dataset = FlyingThingsFlowMAEDataset(
                 root=self.config.root,
@@ -149,6 +162,16 @@ class FlyingThingsFlowMAEDataModule(pl.LightningDataModule):
                 camera=self.config.camera,
                 reverse_flow=self.config.reverse_flow,
                 normalize_rgb=self.config.normalize_rgb,
+                normalize_flow=self.config.normalize_flow,
+                flow_scale=self.config.flow_scale,
+            )
+            print(
+                "[FlowMAEDataModule] "
+                f"train_samples={len(self.train_dataset)} "
+                f"val_samples={len(self.val_dataset)} "
+                f"image_size={tuple(self.config.image_size)} "
+                f"normalize_flow={self.config.normalize_flow} "
+                f"flow_scale={self.train_dataset.flow_scale:.2f}"
             )
 
     def train_dataloader(self) -> DataLoader:

@@ -26,15 +26,15 @@ model:
 training:
   seed: 2021
   max_epochs: 30
-  lr: 3.0e-4
+  lr: 1.0e-4
   min_lr: 1.0e-6
   warmup_epochs: 3
   weight_decay: 0.05
-  gradient_clip_val: 1.0
+  gradient_clip_val: 0.5
   log_every_n_steps: 25
   tb_log_images: 4
   num_sanity_val_steps: 2
-  precision: 16-mixed
+  precision: 32-true
   devices: 1
   allow_tf32: true
   cudnn_benchmark: true
@@ -55,6 +55,8 @@ data:
   pin_memory: true
   persistent_workers: true
   drop_last: true
+  normalize_flow: true
+  flow_scale: 256.0
 
 paths:
   snapshots: ./snapshots
