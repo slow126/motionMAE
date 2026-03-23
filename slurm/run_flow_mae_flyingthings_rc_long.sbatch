@@ -2,7 +2,7 @@
 #SBATCH --job-name=flow_mae_vits_long
 #SBATCH --output=slurm_logs/flow_mae_vits_long_%j.out
 #SBATCH --error=slurm_logs/flow_mae_vits_long_%j.err
-#SBATCH --time=36:00:00
+#SBATCH --time=23:59:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32
