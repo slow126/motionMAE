@@ -34,6 +34,8 @@ class FlyingThingsFlowMAEConfig:
     drop_last: bool = True
     normalize_flow: bool = True
     flow_scale: Optional[float] = None
+    max_flow_magnitude: Optional[float] = None
+    max_flow_magnitude_multiplier: float = 2.0
 
 
 class FlyingThingsFlowMAEDataset(Dataset):
@@ -48,6 +50,8 @@ class FlyingThingsFlowMAEDataset(Dataset):
         normalize_rgb: bool = True,
         normalize_flow: bool = True,
         flow_scale: Optional[float] = None,
+        max_flow_magnitude: Optional[float] = None,
+        max_flow_magnitude_multiplier: float = 2.0,
     ) -> None:
         super().__init__()
         self.dataset = FlyingThings3D(
@@ -62,6 +66,10 @@ class FlyingThingsFlowMAEDataset(Dataset):
         self.normalize_flow = bool(normalize_flow)
         scale_value = flow_scale
         self.flow_scale = float(scale_value) if scale_value is not None else float(max(self.image_size))
+        if max_flow_magnitude is not None:
+            self.max_flow_magnitude = float(max_flow_magnitude)
+        else:
+            self.max_flow_magnitude = float(max(self.image_size)) * float(max_flow_magnitude_multiplier)
 
     def __len__(self) -> int:
         return len(self.dataset)
@@ -118,6 +126,11 @@ class FlyingThingsFlowMAEDataset(Dataset):
         tgt_rgb = self._resize_rgb(tgt_rgb)
         flow, valid = self._resize_flow_and_valid(flow, valid)
 
+        if self.max_flow_magnitude is not None and self.max_flow_magnitude > 0:
+            flow_mag = torch.linalg.vector_norm(flow, dim=0)
+            valid = valid & (flow_mag <= self.max_flow_magnitude)
+            flow = torch.where(valid.unsqueeze(0), flow, torch.zeros_like(flow))
+
         if self.normalize_flow and self.flow_scale > 0:
             flow = flow / self.flow_scale
 
@@ -153,6 +166,8 @@ class FlyingThingsFlowMAEDataModule(pl.LightningDataModule):
                 normalize_rgb=self.config.normalize_rgb,
                 normalize_flow=self.config.normalize_flow,
                 flow_scale=self.config.flow_scale,
+                max_flow_magnitude=self.config.max_flow_magnitude,
+                max_flow_magnitude_multiplier=self.config.max_flow_magnitude_multiplier,
             )
             self.val_dataset = FlyingThingsFlowMAEDataset(
                 root=self.config.root,
@@ -164,6 +179,8 @@ class FlyingThingsFlowMAEDataModule(pl.LightningDataModule):
                 normalize_rgb=self.config.normalize_rgb,
                 normalize_flow=self.config.normalize_flow,
                 flow_scale=self.config.flow_scale,
+                max_flow_magnitude=self.config.max_flow_magnitude,
+                max_flow_magnitude_multiplier=self.config.max_flow_magnitude_multiplier,
             )
             print(
                 "[FlowMAEDataModule] "
@@ -171,7 +188,8 @@ class FlyingThingsFlowMAEDataModule(pl.LightningDataModule):
                 f"val_samples={len(self.val_dataset)} "
                 f"image_size={tuple(self.config.image_size)} "
                 f"normalize_flow={self.config.normalize_flow} "
-                f"flow_scale={self.train_dataset.flow_scale:.2f}"
+                f"flow_scale={self.train_dataset.flow_scale:.2f} "
+                f"max_flow_magnitude={self.train_dataset.max_flow_magnitude:.2f}"
             )
 
     def train_dataloader(self) -> DataLoader:

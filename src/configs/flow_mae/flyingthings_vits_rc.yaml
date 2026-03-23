@@ -56,7 +56,9 @@ data:
   persistent_workers: true
   drop_last: true
   normalize_flow: true
-  flow_scale: 256.0
+  flow_scale: 128.0
+  max_flow_magnitude: null
+  max_flow_magnitude_multiplier: 2.0
 
 paths:
   snapshots: ./snapshots
