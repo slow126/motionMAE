@@ -16,6 +16,9 @@ from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
 
 from .model import FlowMAEModelConfig, FlowMaskedAutoencoderViT
 
+IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32).view(3, 1, 1)
+IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32).view(3, 1, 1)
+
 
 class FlowMAELightningModule(pl.LightningModule):
     def __init__(self, model_config: FlowMAEModelConfig, training_config: dict[str, Any]) -> None:
@@ -54,6 +57,12 @@ class FlowMAELightningModule(pl.LightningModule):
         rgb[0] = (0.5 + u / (2.0 * scale)).clamp(0.0, 1.0)
         rgb[1] = (0.5 + v / (2.0 * scale)).clamp(0.0, 1.0)
         return rgb
+
+    @staticmethod
+    def denormalize_rgb(image: torch.Tensor) -> torch.Tensor:
+        mean = IMAGENET_MEAN.to(device=image.device, dtype=image.dtype)
+        std = IMAGENET_STD.to(device=image.device, dtype=image.dtype)
+        return (image * std + mean).clamp(0.0, 1.0)
 
     @staticmethod
     def endpoint_error(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
@@ -122,23 +131,28 @@ class FlowMAELightningModule(pl.LightningModule):
             plt.close(fig)
 
     def _build_figure(self, idx: int) -> plt.Figure:
+        src_rgb = self.denormalize_rgb(self.example_batch["src_rgb"][idx])
+        tgt_rgb = self.denormalize_rgb(self.example_batch["tgt_rgb"][idx])
         input_rgb = self.flow_to_rgb(self.example_batch["flow_input"][idx])
         gt_rgb = self.flow_to_rgb(self.example_batch["flow"][idx])
         pred_rgb = self.flow_to_rgb(self.example_batch["pred_flow"][idx])
         valid_rgb = self.example_batch["observed_valid"][idx].unsqueeze(0).repeat(3, 1, 1)
 
-        fig, axes = plt.subplots(1, 4, figsize=(14, 4), dpi=130)
+        fig, axes = plt.subplots(2, 3, figsize=(12, 8), dpi=130)
         panels = [
+            ("Source RGB", src_rgb),
+            ("Target RGB", tgt_rgb),
             ("Observed Flow", input_rgb),
             ("Ground Truth", gt_rgb),
             ("Prediction", pred_rgb),
             ("Observed Mask", valid_rgb),
         ]
-        for ax, (title, image) in zip(axes, panels):
+        for ax, (title, image) in zip(axes.flat, panels):
             ax.imshow(np.transpose(image.numpy(), (1, 2, 0)))
             ax.set_title(title, fontsize=8)
             ax.set_xticks([])
             ax.set_yticks([])
+        fig.suptitle("Flow-only reconstruction on valid pixels", fontsize=10)
         fig.tight_layout()
         return fig
 

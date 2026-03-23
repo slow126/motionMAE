@@ -89,7 +89,7 @@ class FlyingThingsFlowMAEDataset(Dataset):
         flow[1] *= scale_y
 
         valid = F.interpolate(
-            valid.unsqueeze(0).unsqueeze(0),
+            valid.float().unsqueeze(0).unsqueeze(0),
             size=self.image_size,
             mode="nearest",
         ).squeeze(0).squeeze(0) > 0.5
