@@ -21,7 +21,12 @@ import yaml
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
 
-from src.flow_mae.dataset import FlyingThingsFlowMAEConfig, FlyingThingsFlowMAEDataModule
+from src.flow_mae.dataset import (
+    FlyingThingsFlowMAEConfig,
+    FlyingThingsFlowMAEDataModule,
+    PointOdysseyProbeConfig,
+    materialize_probe_manifest,
+)
 from src.flow_mae.lightning import FlowMAELightningModule
 from src.flow_mae.model import FlowMAEModelConfig
 
@@ -61,6 +66,7 @@ def main() -> None:
     training_config = config["training"]
     model_config = config["model"]
     data_config = config["data"]
+    pointodyssey_probe_config = config.get("pointodyssey_probe", None)
 
     seed = int(training_config.get("seed", 2021))
     set_seed(seed)
@@ -82,12 +88,42 @@ def main() -> None:
         f"precision={training_config.get('precision')} "
         f"lr={training_config.get('lr')} "
         f"batch_size={data_config.get('batch_size')} "
+        f"observation_mask_mode={model_config.get('observation_mask_mode', 'patch')} "
         f"normalize_flow={data_config.get('normalize_flow', True)} "
         f"flow_scale={data_config.get('flow_scale', 'auto')}"
     )
 
+    probe_cfg = None
+    if pointodyssey_probe_config and pointodyssey_probe_config.get("enabled", False):
+        materialized_probe_manifest = materialize_probe_manifest(
+            source_manifest_path=pointodyssey_probe_config["source_manifest_path"],
+            output_manifest_path=str(run_dir / "pointodyssey_probe_manifest.jsonl"),
+            num_samples=int(pointodyssey_probe_config.get("num_samples", 8)),
+            subset_indices_path=pointodyssey_probe_config.get("subset_indices_path", None),
+        )
+        pointodyssey_probe_config = dict(pointodyssey_probe_config)
+        pointodyssey_probe_config["manifest_path"] = materialized_probe_manifest
+        pointodyssey_probe_config.pop("source_manifest_path", None)
+        pointodyssey_probe_config.pop("enabled", None)
+        pointodyssey_probe_config.setdefault("image_size", data_config.get("image_size", [256, 256]))
+        pointodyssey_probe_config.setdefault("normalize_rgb", data_config.get("normalize_rgb", True))
+        pointodyssey_probe_config.setdefault("normalize_flow", data_config.get("normalize_flow", True))
+        pointodyssey_probe_config.setdefault("flow_scale", data_config.get("flow_scale", None))
+        pointodyssey_probe_config.setdefault("max_flow_magnitude", data_config.get("max_flow_magnitude", None))
+        pointodyssey_probe_config.setdefault(
+            "max_flow_magnitude_multiplier",
+            data_config.get("max_flow_magnitude_multiplier", 2.0),
+        )
+        probe_cfg = PointOdysseyProbeConfig(**pointodyssey_probe_config)
+        print(
+            "[train_flow_mae] "
+            f"pointodyssey_probe_manifest={materialized_probe_manifest} "
+            f"num_samples={probe_cfg.num_samples}"
+        )
+
     datamodule = FlyingThingsFlowMAEDataModule(
-        FlyingThingsFlowMAEConfig(**data_config)
+        FlyingThingsFlowMAEConfig(**data_config),
+        pointodyssey_probe_config=probe_cfg,
     )
     lightning_module = FlowMAELightningModule(
         model_config=FlowMAEModelConfig(**model_config),

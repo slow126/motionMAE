@@ -32,6 +32,7 @@ class FlowMAELightningModule(pl.LightningModule):
         self.model = FlowMaskedAutoencoderViT(model_config)
         self.training_config = training_config
         self.example_batch = None
+        self.pointodyssey_probe_examples = None
 
     def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, Any]:
         return self.model(
@@ -39,6 +40,7 @@ class FlowMAELightningModule(pl.LightningModule):
             tgt_rgb=batch["tgt_rgb"],
             flow=batch["flow"],
             valid=batch["valid"],
+            observed_valid_override=batch.get("observed_valid_override", None),
         )
 
     @staticmethod
@@ -140,8 +142,15 @@ class FlowMAELightningModule(pl.LightningModule):
 
     def on_validation_epoch_start(self) -> None:
         self.example_batch = None
+        self.pointodyssey_probe_examples = None
 
     def on_validation_epoch_end(self) -> None:
+        if self.logger is None:
+            return
+        self._log_main_validation_examples()
+        self._run_pointodyssey_probe()
+
+    def _log_main_validation_examples(self) -> None:
         if self.example_batch is None or self.logger is None:
             return
         max_images = int(self.training_config.get("tb_log_images", 4))
@@ -153,6 +162,70 @@ class FlowMAELightningModule(pl.LightningModule):
             fig = self._build_figure(idx)
             figures.append(fig)
             self.logger.experiment.add_figure(f"val/examples_{idx}", fig, global_step=self.current_epoch)
+        for fig in figures:
+            plt.close(fig)
+
+    def _run_pointodyssey_probe(self) -> None:
+        datamodule = getattr(self.trainer, "datamodule", None)
+        if datamodule is None or not hasattr(datamodule, "get_pointodyssey_probe_dataloader"):
+            return
+        probe_loader = datamodule.get_pointodyssey_probe_dataloader()
+        if probe_loader is None:
+            return
+
+        probe_examples = []
+        max_images = int(self.training_config.get("pointodyssey_probe_log_images", 4))
+        if max_images <= 0:
+            return
+
+        with torch.no_grad():
+            for batch in probe_loader:
+                batch = {
+                    key: value.to(self.device, non_blocking=True) if isinstance(value, torch.Tensor) else value
+                    for key, value in batch.items()
+                }
+                outputs = self(batch)
+                pred_flow_px = self._pixel_space_flow(outputs["pred_flow"], batch.get("flow_scale"))
+                input_flow_px = self._pixel_space_flow(outputs["flow_input"], batch.get("flow_scale"))
+                batch_count = pred_flow_px.shape[0]
+                for idx in range(batch_count):
+                    probe_examples.append(
+                        {
+                            "src_rgb": batch["src_rgb"][idx].detach().cpu(),
+                            "tgt_rgb": batch["tgt_rgb"][idx].detach().cpu(),
+                            "pred_flow": pred_flow_px[idx].detach().cpu(),
+                            "flow_input": input_flow_px[idx].detach().cpu(),
+                            "observed_valid": outputs["observed_valid"][idx].detach().cpu(),
+                        }
+                    )
+                    if len(probe_examples) >= max_images:
+                        break
+                if len(probe_examples) >= max_images:
+                    break
+
+        if not probe_examples:
+            return
+
+        observed_fraction = float(
+            np.mean([example["observed_valid"].float().mean().item() for example in probe_examples])
+        )
+        self.log(
+            "pointodyssey_probe/observed_fraction",
+            observed_fraction,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=False,
+            logger=True,
+        )
+        figures = []
+        for idx, example in enumerate(probe_examples):
+            fig = self._build_probe_figure(example)
+            figures.append(fig)
+            self.logger.experiment.add_figure(
+                f"pointodyssey_probe/examples_{idx}",
+                fig,
+                global_step=self.current_epoch,
+            )
         for fig in figures:
             plt.close(fig)
 
@@ -179,6 +252,30 @@ class FlowMAELightningModule(pl.LightningModule):
             ax.set_xticks([])
             ax.set_yticks([])
         fig.suptitle("Flow-only reconstruction on valid pixels", fontsize=10)
+        fig.tight_layout()
+        return fig
+
+    def _build_probe_figure(self, example: dict[str, torch.Tensor]) -> plt.Figure:
+        src_rgb = self.denormalize_rgb(example["src_rgb"])
+        tgt_rgb = self.denormalize_rgb(example["tgt_rgb"])
+        input_rgb = self.flow_to_rgb(example["flow_input"])
+        pred_rgb = self.flow_to_rgb(example["pred_flow"])
+        valid_rgb = example["observed_valid"].unsqueeze(0).repeat(3, 1, 1)
+
+        fig, axes = plt.subplots(1, 5, figsize=(15, 4), dpi=130)
+        panels = [
+            ("Source RGB", src_rgb),
+            ("Target RGB", tgt_rgb),
+            ("Observed Sparse Flow", input_rgb),
+            ("Prediction", pred_rgb),
+            ("Observed Mask", valid_rgb),
+        ]
+        for ax, (title, image) in zip(axes, panels):
+            ax.imshow(np.transpose(image.numpy(), (1, 2, 0)))
+            ax.set_title(title, fontsize=8)
+            ax.set_xticks([])
+            ax.set_yticks([])
+        fig.suptitle("Point Odyssey probe inference", fontsize=10)
         fig.tight_layout()
         return fig
 
