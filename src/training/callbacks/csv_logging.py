@@ -32,6 +32,43 @@ class CSVLoggingCallback(pl.Callback):
         self.validation_log_initialized = False
         self.logged_step_targets = set()
         self.logged_initial = False
+        self.logged_row_keys = set()
+        self._initialize_from_existing_file()
+
+    def _row_key(self, scope: str, target: Any, benchmark: str, step: Any) -> tuple:
+        return (str(scope), str(target), str(benchmark), str(step))
+
+    def _initialize_from_existing_file(self):
+        if not self.validation_log_file.exists():
+            return
+        if self.validation_log_file.stat().st_size <= 0:
+            return
+        try:
+            with open(self.validation_log_file, 'r', newline='') as f:
+                reader = csv.DictReader(f)
+                row_count = 0
+                for row in reader:
+                    row_count += 1
+                    scope = row.get('validation_scope', 'epoch')
+                    target = row.get('validation_target', '')
+                    benchmark = row.get('benchmark', '')
+                    step = row.get('training_steps', '')
+                    self.logged_row_keys.add(self._row_key(scope, target, benchmark, step))
+                    if scope == 'initial':
+                        self.logged_initial = True
+                    if scope == 'step':
+                        try:
+                            self.logged_step_targets.add(int(float(target)))
+                        except Exception:
+                            pass
+            self.validation_log_initialized = True
+            print(
+                f"Appending to existing validation CSV: {self.validation_log_file} "
+                f"(rows={row_count}, unique_keys={len(self.logged_row_keys)})"
+            )
+        except Exception as exc:
+            # Fallback: rewrite file later if parsing failed.
+            print(f"WARNING: Failed to parse existing validation CSV ({exc}); will recreate on next write.")
     
     def _write_rows(self, trainer: pl.Trainer, pl_module: pl.LightningModule, val_results: Dict[str, Any]):
         cumulative_steps = pl_module.get_cumulative_training_steps()
@@ -75,6 +112,9 @@ class CSVLoggingCallback(pl.Callback):
         with open(self.validation_log_file, 'a', newline='') as f:
             writer = csv.writer(f)
             for benchmark, results in val_results.items():
+                row_key = self._row_key(validation_scope, validation_target, benchmark, validation_step)
+                if row_key in self.logged_row_keys:
+                    continue
                 pck_motion_aware = results.get('pck_motion_aware', '')
                 motion_binned = results.get('motion_binned', {})
                 pck_motion_small = motion_binned.get('small', {}).get('mean_pck', '') if motion_binned else ''
@@ -111,6 +151,7 @@ class CSVLoggingCallback(pl.Callback):
                     f"{mmd_pred_corr_vs_gt:.6f}" if isinstance(mmd_pred_corr_vs_gt, (int, float)) else '',
                     f"{mmd_pred_miss_vs_gt:.6f}" if isinstance(mmd_pred_miss_vs_gt, (int, float)) else ''
                 ])
+                self.logged_row_keys.add(row_key)
             f.flush()
             os.fsync(f.fileno())
 

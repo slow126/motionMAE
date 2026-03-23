@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import List, Optional
 
 import numpy as np
 import pandas as pd
@@ -67,6 +67,72 @@ def select_stratified_bins(
         return work.iloc[0:0].copy()
     out = pd.concat(samples, axis=0).drop(columns=["_bin"], errors="ignore")
     return out
+
+
+def farthest_point_sampling(
+    descriptors: np.ndarray,
+    budget: int,
+    seed: int = 42,
+) -> List[int]:
+    """Greedy FPS in descriptor space (O(budget * N) distance computations).
+
+    Args:
+        descriptors: (N, D) array, should be pre-standardized.
+        budget:      Number of points to select.
+        seed:        Random seed for initial point.
+
+    Returns:
+        List of selected row indices.
+    """
+    N = descriptors.shape[0]
+    budget = min(int(max(0, budget)), N)
+    if budget == 0:
+        return []
+
+    rng = np.random.RandomState(seed)
+    min_dist = np.full(N, np.inf, dtype=np.float64)
+
+    first_idx = int(rng.randint(N))
+    selected = [first_idx]
+    dists = np.linalg.norm(descriptors.astype(np.float64) - descriptors[first_idx], axis=1)
+    np.minimum(min_dist, dists, out=min_dist)
+
+    for _ in range(1, budget):
+        next_idx = int(np.argmax(min_dist))
+        selected.append(next_idx)
+        dists = np.linalg.norm(descriptors.astype(np.float64) - descriptors[next_idx], axis=1)
+        np.minimum(min_dist, dists, out=min_dist)
+        min_dist[next_idx] = -np.inf
+
+    return selected
+
+
+def select_fps(
+    df: pd.DataFrame,
+    descriptors: np.ndarray,
+    budget: int,
+    seed: int = 42,
+) -> pd.DataFrame:
+    """Select rows via Farthest Point Sampling in pre-standardized descriptor space.
+
+    Args:
+        df:          DataFrame aligned with descriptors (same row order).
+        descriptors: (N, D) array — must be standardized before calling.
+        budget:      Number of pairs to select.
+        seed:        Random seed for FPS initial point.
+
+    Returns:
+        Sub-DataFrame of selected rows.
+    """
+    budget = int(max(0, budget))
+    if budget == 0 or len(df) == 0:
+        return df.iloc[0:0].copy()
+    if len(df) != len(descriptors):
+        raise ValueError(
+            f"df length ({len(df)}) != descriptors length ({len(descriptors)})"
+        )
+    idx = farthest_point_sampling(descriptors, budget, seed=seed)
+    return df.iloc[idx].copy()
 
 
 def rank_column(

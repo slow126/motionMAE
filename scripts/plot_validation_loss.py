@@ -41,6 +41,14 @@ def parse_args() -> argparse.Namespace:
         help="Column to plot from validation_results.csv (default: pck).",
     )
     parser.add_argument(
+        "--metrics",
+        nargs="+",
+        choices=["loss", "pck", "pck_motion_aware"],
+        default=None,
+        metavar="METRIC",
+        help="Plot multiple metrics side by side (one column per metric). Overrides --metric.",
+    )
+    parser.add_argument(
         "--include-step-zero",
         action="store_true",
         help="Prepend a step=0 point for each run/benchmark using first measured value.",
@@ -72,6 +80,11 @@ def parse_args() -> argparse.Namespace:
         "--compare-step-zero",
         action="store_true",
         help="Show side-by-side plots per benchmark: without step-0 and with step-0.",
+    )
+    parser.add_argument(
+        "--exclude-step-zero",
+        action="store_true",
+        help="Drop rows where selected x-axis equals 0 (applies across all scopes).",
     )
     parser.add_argument(
         "--output",
@@ -142,6 +155,8 @@ def _prepare_series(
         series = series[series["validation_target"] == args.target]
     series = series.sort_values(args.x_axis).dropna(subset=[args.x_axis, args.metric])
     series = _apply_scope(series, args.scope, args.x_axis)
+    if args.exclude_step_zero:
+        series = series[series[args.x_axis] != 0]
     if not include_explicit_zero:
         series = series[series[args.x_axis] != 0]
     if include_zero:
@@ -352,6 +367,66 @@ def plot_metric_curves(
     print(f"Saved plot: {args.output}")
 
 
+def plot_multi_metric(
+    snapshots: list[pathlib.Path],
+    labels: list[str],
+    metrics: list[str],
+    args: argparse.Namespace,
+) -> None:
+    """Plot multiple metrics side by side: rows=benchmarks, cols=metrics."""
+    # Load all CSVs for each metric
+    runs_per_metric = {}
+    for metric in metrics:
+        runs_per_metric[metric] = [
+            (label, load_validation_csv(snap, metric))
+            for label, snap in zip(labels, snapshots)
+        ]
+
+    # Find common benchmarks across all metrics and runs
+    all_dfs = [df for runs in runs_per_metric.values() for _, df in runs]
+    common_benchmarks = set(all_dfs[0]["benchmark"])
+    for df in all_dfs[1:]:
+        common_benchmarks &= set(df["benchmark"])
+    common_benchmarks = sorted(common_benchmarks)
+    if not common_benchmarks:
+        raise ValueError("No common benchmarks found.")
+
+    n_rows = len(common_benchmarks)
+    n_cols = len(metrics)
+    fig, axes = plt.subplots(
+        n_rows, n_cols,
+        figsize=(n_cols * 5, n_rows * 3.5),
+        squeeze=False,
+    )
+
+    for col, metric in enumerate(metrics):
+        args_copy = argparse.Namespace(**vars(args))
+        args_copy.metric = metric
+        runs = runs_per_metric[metric]
+        run_names = [name for name, _ in runs]
+        run_dfs = [df for _, df in runs]
+
+        for row, bench in enumerate(common_benchmarks):
+            series = [
+                (name, _prepare_series(df, bench, args_copy))
+                for name, df in zip(run_names, run_dfs)
+            ]
+            show_legend = (row == 0 and col == n_cols - 1)
+            plot_single(axes[row][col], series, args_copy, bench, show_legend=show_legend)
+            if row == 0:
+                axes[row][col].set_title(f"{bench}\n({metric})")
+            else:
+                axes[row][col].set_title(f"{bench} ({metric})")
+
+    handles, labels_legend = axes[0][n_cols - 1].get_legend_handles_labels()
+    if handles:
+        fig.legend(handles, labels_legend, loc="upper right", fontsize=8)
+    fig.suptitle(f"Validation: {' vs '.join(metrics)} ({args.scope})")
+    fig.tight_layout()
+    fig.savefig(args.output, dpi=200)
+    print(f"Saved plot: {args.output}")
+
+
 def main() -> None:
     args = parse_args()
     if len(args.snapshots) < 2:
@@ -362,6 +437,11 @@ def main() -> None:
         raise ValueError("--labels count must match number of snapshots.")
 
     labels = list(args.labels) if args.labels is not None else [snap.name for snap in snapshots]
+
+    if args.metrics is not None:
+        plot_multi_metric(snapshots, labels, args.metrics, args)
+        return
+
     runs = [(label, load_validation_csv(snap, args.metric)) for label, snap in zip(labels, snapshots)]
     plot_metric_curves(runs, args)
 

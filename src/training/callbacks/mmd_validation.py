@@ -110,7 +110,11 @@ class MMDValidationCallback(pl.Callback):
             'validation_scope': scope,
             'validation_epoch': 0 if scope == 'initial' else trainer.current_epoch + 1,
             'validation_step': step,
-            'validation_target': 0 if scope in ['initial', 'step'] else trainer.current_epoch + 1,
+            # For step-scoped validation, target should be the triggering global step.
+            # CSV logging deduplicates on validation_target, so this must be step-specific.
+            'validation_target': (
+                0 if scope == 'initial' else (step if scope == 'step' else trainer.current_epoch + 1)
+            ),
         }
 
         # validate_epoch_multi_benchmark puts the model in eval mode; restore mode after.
@@ -272,6 +276,12 @@ class MMDValidationCallback(pl.Callback):
     def on_train_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
         """Optional initial validation before any optimizer step."""
         if not self.training_config.get('eval_initial', False):
+            return
+        # On resume, global_step is non-zero; skip "initial" eval to avoid misleading
+        # step-0 rows that are actually from a loaded checkpoint state.
+        current_step = int(getattr(trainer, 'global_step', 0))
+        if current_step > 0:
+            print(f"Skipping initial validation on resume (global_step={current_step})")
             return
 
         self._run_validation(trainer, pl_module, scope='initial', step=0)

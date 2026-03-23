@@ -145,6 +145,8 @@ def main():
     parser = argparse.ArgumentParser(description='PyTorch Lightning Training Script')
     parser.add_argument('--config', type=str, required=True,
                        help='Path to YAML config file')
+    parser.add_argument('--resume-ckpt', type=str, default=None,
+                       help='Optional PyTorch Lightning .ckpt path to resume an interrupted run')
     parser.add_argument('--inspect-data', action='store_true',
                        help='Run a quick data sanity check with visualizations and exit')
     parser.add_argument('--inspect-output-dir', type=str, default='debug_collate',
@@ -166,6 +168,12 @@ def main():
     dataset_config = config['dataset']
     eval_config = config['evaluation']
     paths_config = config['paths']
+
+    resume_ckpt_path = None
+    if args.resume_ckpt:
+        resume_ckpt_path = Path(args.resume_ckpt).expanduser().resolve()
+        if not resume_ckpt_path.is_file():
+            raise FileNotFoundError(f"Resume checkpoint not found: {resume_ckpt_path}")
 
     # Optional CPU thread cap to avoid DDP + OpenCV/BLAS oversubscription.
     cpu_threads = training_config.get('cpu_threads', None)
@@ -267,13 +275,26 @@ def main():
     # Handle pretrained checkpoint loading for finetuning
     pretrained_path = paths_config.get('pretrained', None)
     start_epoch = paths_config.get('start_epoch', -1)
+    if resume_ckpt_path is not None and pretrained_path:
+        raise ValueError("Cannot use both paths.pretrained and --resume-ckpt in the same run.")
     
     # Create snapshot directory
     snapshots_dir = paths_config.get('snapshots', './snapshots')
     if not os.path.isdir(snapshots_dir):
         os.mkdir(snapshots_dir)
     
-    if pretrained_path:
+    if resume_ckpt_path is not None:
+        # Resume in-place: keep writing into the snapshot that owns the .ckpt file.
+        if resume_ckpt_path.parent.name == "checkpoints":
+            resume_snapshot_dir = resume_ckpt_path.parent.parent
+        else:
+            resume_snapshot_dir = resume_ckpt_path.parent
+        cur_snapshot = resume_snapshot_dir.name
+        snapshots_dir = str(resume_snapshot_dir.parent)
+        save_path = str(resume_snapshot_dir)
+        os.makedirs(save_path, exist_ok=True)
+        print(f"Resuming run: Using existing snapshot directory: {cur_snapshot}")
+    elif pretrained_path:
         # If pointing to a directory, automatically use model_best.pth
         if os.path.isdir(pretrained_path):
             pretrained_path_full = os.path.join(pretrained_path, 'model_best.pth')
@@ -293,11 +314,11 @@ def main():
         # Create snapshot directory for training from scratch
         cur_snapshot = name_exp
         print(f"Training from scratch: Using snapshot directory: {cur_snapshot}")
-    
-    if not os.path.isdir(os.path.join(snapshots_dir, cur_snapshot)):
-        os.makedirs(os.path.join(snapshots_dir, cur_snapshot))
-    
-    save_path = os.path.join(snapshots_dir, cur_snapshot)
+
+    if resume_ckpt_path is None:
+        if not os.path.isdir(os.path.join(snapshots_dir, cur_snapshot)):
+            os.makedirs(os.path.join(snapshots_dir, cur_snapshot))
+        save_path = os.path.join(snapshots_dir, cur_snapshot)
     
     # Save config file to snapshot directory
     with open(os.path.join(save_path, 'config.yaml'), 'w') as f:
@@ -490,7 +511,11 @@ def main():
     print(f"Learning rate: {training_config.get('lr', 3e-4)}")
     print(f"Backbone learning rate: {training_config.get('lr_backbone', 3e-6)}")
     
-    trainer.fit(lightning_module, datamodule, ckpt_path=None)
+    resume_ckpt = str(resume_ckpt_path) if resume_ckpt_path is not None else None
+    if resume_ckpt:
+        print(f"Resuming Lightning state from checkpoint: {resume_ckpt}")
+
+    trainer.fit(lightning_module, datamodule, ckpt_path=resume_ckpt)
     
     print(f'\nTraining took: {time.time() - train_started:.2f} seconds')
     print(f'Training completed successfully!')
