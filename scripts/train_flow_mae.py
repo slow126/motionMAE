@@ -171,10 +171,27 @@ def main() -> None:
         benchmark=bool(training_config.get("cudnn_benchmark", True)) if torch.cuda.is_available() else False,
     )
 
+    # Optional: warm-start from a previous checkpoint (model weights only, fresh optimizer/LR)
+    resume_ckpt = training_config.get("resume_ckpt", None)
+    if resume_ckpt:
+        resume_ckpt = str(Path(resume_ckpt).expanduser().resolve())
+        print(f"[train_flow_mae] warm-starting model weights from {resume_ckpt}")
+        ckpt = torch.load(resume_ckpt, map_location="cpu", weights_only=False)
+        state = {k[len("model."):]: v for k, v in ckpt["state_dict"].items()
+                 if k.startswith("model.")}
+        missing, unexpected = lightning_module.model.load_state_dict(state, strict=True)
+        if missing:
+            print(f"  [warn] missing keys: {missing}")
+        if unexpected:
+            print(f"  [warn] unexpected keys: {unexpected}")
+        print(f"  loaded {len(state)} tensors — optimizer/LR schedule starts fresh")
+
     with open(run_dir / "launch.txt", "w", encoding="utf-8") as handle:
         handle.write(f"config={Path(args.config).resolve()}\n")
         handle.write(f"cwd={Path(os.getcwd()).resolve()}\n")
         handle.write(f"devices={devices}\n")
+        if resume_ckpt:
+            handle.write(f"resume_ckpt={resume_ckpt}\n")
 
     trainer.fit(lightning_module, datamodule=datamodule)
 

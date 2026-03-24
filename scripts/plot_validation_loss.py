@@ -203,6 +203,37 @@ def plot_single(
         ax.legend(fontsize=8)
 
 
+def _first_handles_labels(axes: Sequence[plt.Axes]) -> tuple[list, list]:
+    for ax in axes:
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            return handles, labels
+    return [], []
+
+
+def _place_shared_legend(fig: plt.Figure, axes: Sequence[plt.Axes], handles: list, labels: list) -> None:
+    if not handles:
+        return
+
+    # Prefer using an unused grid cell so legend does not cover plotted curves.
+    for ax in axes:
+        if not ax.get_visible():
+            ax.set_visible(True)
+            ax.set_axis_off()
+            ax.legend(handles, labels, loc="center", fontsize=8, frameon=False)
+            return
+
+    # Fallback when no spare subplot exists.
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.995),
+        ncol=max(1, min(len(labels), 4)),
+        fontsize=8,
+    )
+
+
 def plot_metric_curves(
     runs: Sequence[tuple[str, pd.DataFrame]],
     args: argparse.Namespace,
@@ -249,12 +280,11 @@ def plot_metric_curves(
                 args,
                 args.benchmark,
                 suffix="with step-0",
-                show_legend=True,
+                show_legend=False,
             )
-            handles, labels = axes[1].get_legend_handles_labels()
-            fig.tight_layout()
-            if handles:
-                fig.legend(handles, labels, loc="upper right", fontsize=8)
+            handles, labels = _first_handles_labels(list(axes))
+            _place_shared_legend(fig, list(axes), handles, labels)
+            fig.tight_layout(rect=[0, 0, 1, 0.96])
             fig.savefig(args.output, dpi=200)
             print(f"Saved plot: {args.output}")
             return
@@ -263,8 +293,10 @@ def plot_metric_curves(
             (name, _prepare_series(df, args.benchmark, args))
             for name, df in zip(run_names, run_dfs)
         ]
-        plot_single(ax, series, args, args.benchmark, show_legend=True)
-        fig.tight_layout()
+        plot_single(ax, series, args, args.benchmark, show_legend=False)
+        handles, labels = ax.get_legend_handles_labels()
+        _place_shared_legend(fig, [ax], handles, labels)
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
         fig.savefig(args.output, dpi=200)
         print(f"Saved plot: {args.output}")
         return
@@ -312,7 +344,6 @@ def plot_metric_curves(
                 for name, df in zip(run_names, run_dfs)
             ]
 
-            show_legend = (idx == 0)
             plot_single(
                 axes[idx][0],
                 no_series,
@@ -327,7 +358,7 @@ def plot_metric_curves(
                 args,
                 bench,
                 suffix="with step-0",
-                show_legend=show_legend,
+                show_legend=False,
             )
 
             # Hide the right plot if no data was available.
@@ -336,11 +367,11 @@ def plot_metric_curves(
             if all(series.empty for _, series in with_series):
                 axes[idx][1].set_visible(False)
 
-        handles, labels = axes[0][1].get_legend_handles_labels()
-        if handles:
-            fig.legend(handles, labels, loc="upper right", fontsize=8)
+        flat_axes = list(axes.flatten())
+        handles, labels = _first_handles_labels(flat_axes)
+        _place_shared_legend(fig, flat_axes, handles, labels)
         fig.suptitle(f"Validation {args.metric} by benchmark ({args.scope}), no-vs-with step-0")
-        fig.tight_layout()
+        fig.tight_layout(rect=[0, 0, 1, 0.96])
         fig.savefig(args.output, dpi=200)
         print(f"Saved plot: {args.output}")
         return
@@ -358,11 +389,11 @@ def plot_metric_curves(
         axes[j].set_visible(False)
 
     # Build a shared legend from the first valid axis
-    handles, labels = axes[0].get_legend_handles_labels()
-    if handles:
-        fig.legend(handles, labels, loc="upper right", fontsize=8)
+    flat_axes = list(axes)
+    handles, labels = _first_handles_labels(flat_axes)
+    _place_shared_legend(fig, flat_axes, handles, labels)
     fig.suptitle(f"Validation {args.metric} by benchmark ({args.scope})")
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
     fig.savefig(args.output, dpi=200)
     print(f"Saved plot: {args.output}")
 
@@ -411,18 +442,17 @@ def plot_multi_metric(
                 (name, _prepare_series(df, bench, args_copy))
                 for name, df in zip(run_names, run_dfs)
             ]
-            show_legend = (row == 0 and col == n_cols - 1)
-            plot_single(axes[row][col], series, args_copy, bench, show_legend=show_legend)
+            plot_single(axes[row][col], series, args_copy, bench, show_legend=False)
             if row == 0:
                 axes[row][col].set_title(f"{bench}\n({metric})")
             else:
                 axes[row][col].set_title(f"{bench} ({metric})")
 
-    handles, labels_legend = axes[0][n_cols - 1].get_legend_handles_labels()
-    if handles:
-        fig.legend(handles, labels_legend, loc="upper right", fontsize=8)
+    flat_axes = list(axes.flatten())
+    handles, labels_legend = _first_handles_labels(flat_axes)
+    _place_shared_legend(fig, flat_axes, handles, labels_legend)
     fig.suptitle(f"Validation: {' vs '.join(metrics)} ({args.scope})")
-    fig.tight_layout()
+    fig.tight_layout(rect=[0, 0, 1, 0.96])
     fig.savefig(args.output, dpi=200)
     print(f"Saved plot: {args.output}")
 

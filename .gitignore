@@ -60,3 +60,6 @@ models/**/*_umap_results/
 *.onnx
 *.npy
 *.npz
+
+scripts/mae_latent*
+snapshots_mae/

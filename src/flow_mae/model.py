@@ -29,6 +29,9 @@ class FlowMAEModelConfig:
     observation_mask_mode: str = "patch"
     speckle_keep_ratio: float = 0.05
     speckle_dilation_kernel: int = 1
+    # "scheduled" mode probabilities (must sum to ≤ 1.0; remainder → mixed)
+    scheduled_full_prob: float = 0.10   # P(all flow visible)
+    scheduled_none_prob: float = 0.40   # P(no flow visible / RGB-only)
     loss: str = "smooth_l1"
     smooth_l1_beta: float = 1.0
 
@@ -264,9 +267,46 @@ class FlowMaskedAutoencoderViT(nn.Module):
             masked_pixels = valid * (1.0 - observed_valid)
             return observed_valid, patch_mask, masked_pixels
 
+        if mode == "scheduled":
+            # Per-sample mode assignment:
+            #   full_prob      → all valid pixels observed
+            #   none_prob      → zero pixels observed (RGB-only)
+            #   1-full-none    → mixed (speckle × patch) masking
+            full_prob = float(self.config.scheduled_full_prob)
+            none_prob = float(self.config.scheduled_none_prob)
+            observed_valid = torch.zeros_like(valid)
+            patch_mask_out = torch.zeros(bsz, self.grid_size ** 2, device=valid.device)
+            masked_pixels_out = torch.zeros_like(valid)
+            for b in range(bsz):
+                v1 = valid[b : b + 1]
+                r = torch.rand(1).item()
+                if r < full_prob:
+                    ov = v1.clone()
+                    mp = torch.zeros_like(v1)
+                    pm = torch.zeros(1, self.grid_size ** 2, device=valid.device)
+                elif r < full_prob + none_prob:
+                    ov = torch.zeros_like(v1)
+                    mp = v1.clone()
+                    pm = (self.patchify_mask(mp) > 0).float()
+                else:
+                    pm_b = self.sample_patch_mask(v1)
+                    patch_vis = 1.0 - F.interpolate(
+                        pm_b.view(1, 1, self.grid_size, self.grid_size),
+                        scale_factor=self.patch_size,
+                        mode="nearest",
+                    )[:, 0]
+                    speckle_vis = self.sample_speckle_observation(v1)
+                    ov = v1 * patch_vis * speckle_vis
+                    mp = v1 * (1.0 - ov)
+                    pm = pm_b
+                observed_valid[b] = ov[0]
+                patch_mask_out[b] = pm[0]
+                masked_pixels_out[b] = mp[0]
+            return observed_valid, patch_mask_out, masked_pixels_out
+
         raise ValueError(
             f"Unsupported observation_mask_mode={self.config.observation_mask_mode!r}. "
-            "Expected one of {'patch', 'speckle', 'mixed'}."
+            "Expected one of {{'patch', 'speckle', 'mixed', 'scheduled'}}."
         )
 
     def unpatchify_flow(self, flow_tokens: torch.Tensor) -> torch.Tensor:
