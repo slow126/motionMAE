@@ -39,6 +39,8 @@ class FlowMAEDINOContextLightningModule(pl.LightningModule):
 
     def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, Any]:
         return self.model(
+            src_rgb=batch["src_rgb"],
+            tgt_rgb=batch["tgt_rgb"],
             src_dino=batch["src_dino"],
             tgt_dino=batch["tgt_dino"],
             flow=batch["flow"],
@@ -220,7 +222,7 @@ class FlowMAEDINOContextLightningModule(pl.LightningModule):
             ax.set_title(title, fontsize=8)
             ax.set_xticks([])
             ax.set_yticks([])
-        fig.suptitle("DINO-context flow reconstruction", fontsize=10)
+        fig.suptitle("Hybrid RGB + DINO context flow reconstruction", fontsize=10)
         fig.tight_layout()
         return fig
 

@@ -13,6 +13,7 @@ import torch.nn.functional as F
 class FlowMAEDINOContextModelConfig:
     image_size: int = 256
     patch_size: int = 16
+    rgb_channels: int = 6
     flow_channels: int = 2
     valid_channels: int = 1
     context_feature_dim: int = 768
@@ -140,18 +141,22 @@ class FlowMaskedAutoencoderDINOPrependedContextViT(nn.Module):
         self.flow_patch_dim = int(config.flow_channels) * patch_size * patch_size
         self.context_feature_dim = int(config.context_feature_dim)
 
-        self.flow_embed = PatchEmbed(int(config.flow_channels + config.valid_channels), patch_size, int(config.encoder_dim))
+        self.local_embed = PatchEmbed(
+            int(config.rgb_channels + config.flow_channels + config.valid_channels),
+            patch_size,
+            int(config.encoder_dim),
+        )
         self.context_norm = nn.LayerNorm(self.context_feature_dim)
         self.context_proj = nn.Linear(self.context_feature_dim, int(config.encoder_dim))
 
-        self.flow_pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, int(config.encoder_dim)))
+        self.local_pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, int(config.encoder_dim)))
         self.context_pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, int(config.encoder_dim)))
         self.src_type_embed = nn.Parameter(torch.zeros(1, 1, int(config.encoder_dim)))
         self.tgt_type_embed = nn.Parameter(torch.zeros(1, 1, int(config.encoder_dim)))
-        self.flow_type_embed = nn.Parameter(torch.zeros(1, 1, int(config.encoder_dim)))
+        self.local_type_embed = nn.Parameter(torch.zeros(1, 1, int(config.encoder_dim)))
 
-        self.decoder_pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, int(config.decoder_dim)))
-        self.decoder_flow_type_embed = nn.Parameter(torch.zeros(1, 1, int(config.decoder_dim)))
+        self.decoder_local_pos_embed = nn.Parameter(torch.zeros(1, self.num_patches, int(config.decoder_dim)))
+        self.decoder_local_type_embed = nn.Parameter(torch.zeros(1, 1, int(config.decoder_dim)))
 
         self.encoder = TransformerStack(
             dim=int(config.encoder_dim),
@@ -175,13 +180,13 @@ class FlowMaskedAutoencoderDINOPrependedContextViT(nn.Module):
         self.initialize_weights()
 
     def initialize_weights(self) -> None:
-        nn.init.trunc_normal_(self.flow_pos_embed, std=0.02)
+        nn.init.trunc_normal_(self.local_pos_embed, std=0.02)
         nn.init.trunc_normal_(self.context_pos_embed, std=0.02)
         nn.init.trunc_normal_(self.src_type_embed, std=0.02)
         nn.init.trunc_normal_(self.tgt_type_embed, std=0.02)
-        nn.init.trunc_normal_(self.flow_type_embed, std=0.02)
-        nn.init.trunc_normal_(self.decoder_pos_embed, std=0.02)
-        nn.init.trunc_normal_(self.decoder_flow_type_embed, std=0.02)
+        nn.init.trunc_normal_(self.local_type_embed, std=0.02)
+        nn.init.trunc_normal_(self.decoder_local_pos_embed, std=0.02)
+        nn.init.trunc_normal_(self.decoder_local_type_embed, std=0.02)
         self.apply(self._init_weights)
 
     @staticmethod
@@ -323,13 +328,20 @@ class FlowMaskedAutoencoderDINOPrependedContextViT(nn.Module):
         x = x.permute(0, 3, 1, 4, 2, 5).contiguous()
         return x.view(bsz, flow_channels, self.image_size, self.image_size)
 
-    def build_inputs(self, flow: torch.Tensor, observed_valid: torch.Tensor) -> torch.Tensor:
+    def build_local_inputs(
+        self,
+        src_rgb: torch.Tensor,
+        tgt_rgb: torch.Tensor,
+        flow: torch.Tensor,
+        observed_valid: torch.Tensor,
+    ) -> torch.Tensor:
         bsz, _, height, width = flow.shape
         if height != self.image_size or width != self.image_size:
             raise ValueError(f"Expected {self.image_size}x{self.image_size} inputs, got {height}x{width}")
+        rgb = torch.cat([src_rgb, tgt_rgb], dim=1)
         observed_flow = flow * observed_valid.unsqueeze(1)
-        flow_input = torch.cat([observed_flow, observed_valid.unsqueeze(1)], dim=1)
-        return flow_input
+        local_input = torch.cat([rgb, observed_flow, observed_valid.unsqueeze(1)], dim=1)
+        return local_input
 
     def flatten_context_tokens(self, context: torch.Tensor) -> torch.Tensor:
         if context.dim() == 4:
@@ -373,6 +385,8 @@ class FlowMaskedAutoencoderDINOPrependedContextViT(nn.Module):
 
     def forward(
         self,
+        src_rgb: torch.Tensor,
+        tgt_rgb: torch.Tensor,
         src_dino: torch.Tensor,
         tgt_dino: torch.Tensor,
         flow: torch.Tensor,
@@ -395,14 +409,14 @@ class FlowMaskedAutoencoderDINOPrependedContextViT(nn.Module):
         else:
             observed_valid, patch_mask, masked_pixels = self.sample_observation_mask(valid)
 
-        flow_input = self.build_inputs(flow, observed_valid)
-        flow_tokens = self.flow_embed(flow_input) + self.flow_pos_embed + self.flow_type_embed
+        local_input = self.build_local_inputs(src_rgb, tgt_rgb, flow, observed_valid)
+        local_tokens = self.local_embed(local_input) + self.local_pos_embed + self.local_type_embed
         context_tokens = self.build_context_sequence(src_dino, tgt_dino)
-        encoded = self.encoder(torch.cat([context_tokens, flow_tokens], dim=1))
+        encoded = self.encoder(torch.cat([context_tokens, local_tokens], dim=1))
 
-        encoded_flow_tokens = encoded[:, -self.num_patches :]
+        encoded_local_tokens = encoded[:, -self.num_patches :]
         decoded = self.decoder(
-            self.encoder_to_decoder(encoded_flow_tokens) + self.decoder_pos_embed + self.decoder_flow_type_embed
+            self.encoder_to_decoder(encoded_local_tokens) + self.decoder_local_pos_embed + self.decoder_local_type_embed
         )
         pred_flow = self.unpatchify_flow(self.flow_head(decoded))
         loss = self.compute_loss(pred_flow, flow, masked_pixels)
@@ -414,7 +428,7 @@ class FlowMaskedAutoencoderDINOPrependedContextViT(nn.Module):
             "masked_pixels": masked_pixels,
             "observed_pixels": observed_valid,
             "observed_valid": observed_valid,
-            "flow_input": flow_input[:, :2],
-            "encoded_tokens": encoded_flow_tokens,
+            "flow_input": local_input[:, int(self.config.rgb_channels):int(self.config.rgb_channels) + int(self.config.flow_channels)],
+            "encoded_tokens": encoded_local_tokens,
             "context_tokens": context_tokens,
         }
