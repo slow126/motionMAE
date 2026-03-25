@@ -1,13 +1,14 @@
 experiment:
   name: flyingthings_flow_mae_dinov3_ctx
   description: >-
-    FlyingThings masked flow MAE with prepended DINOv3 source/target patch tokens as semantic
-    context. Flow observations use scheduled masking so some samples are fully masked and must be
-    reconstructed from DINO context alone.
+    FlyingThings masked flow MAE with fused local RGB+flow tokens and prepended DINOv3
+    source/target patch tokens as semantic context. Flow observations use scheduled masking so
+    some samples are fully masked.
 
 model:
   image_size: 256
   patch_size: 16
+  rgb_channels: 6
   flow_channels: 2
   valid_channels: 1
   context_feature_dim: 768
