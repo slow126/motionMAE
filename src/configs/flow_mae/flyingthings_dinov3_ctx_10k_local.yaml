@@ -1,0 +1,71 @@
+experiment:
+  name: flyingthings_10k_flow_mae_dinov3_ctx_local
+  description: >-
+    Local FlyingThings 10k masked flow MAE with prepended DINOv3 source/target patch tokens as
+    semantic context.
+
+model:
+  image_size: 256
+  patch_size: 16
+  flow_channels: 2
+  valid_channels: 1
+  context_feature_dim: 768
+  encoder_dim: 768
+  encoder_depth: 8
+  encoder_heads: 12
+  mlp_ratio: 4.0
+  decoder_dim: 512
+  decoder_depth: 4
+  decoder_heads: 8
+  dropout: 0.0
+  attention_dropout: 0.0
+  mask_ratio: 0.75
+  observation_mask_mode: scheduled
+  speckle_keep_ratio: 0.20
+  speckle_dilation_kernel: 1
+  scheduled_full_prob: 0.10
+  scheduled_none_prob: 0.45
+  loss: smooth_l1
+  smooth_l1_beta: 1.0
+
+training:
+  seed: 2021
+  max_epochs: 30
+  lr: 1.0e-4
+  min_lr: 1.0e-6
+  warmup_epochs: 3
+  weight_decay: 0.05
+  gradient_clip_val: 0.5
+  log_every_n_steps: 25
+  tb_log_images: 4
+  num_sanity_val_steps: 2
+  precision: 32-true
+  devices: 1
+  allow_tf32: true
+  cudnn_benchmark: true
+  float32_matmul_precision: high
+
+data:
+  root: /home/spencer/Data/FlyingThings3D_10k
+  dino_features_root: /home/spencer/Data/precomputed/flyingthings_10k_dinov3_vitb16_256x256
+  dino_feature_subdir: features
+  train_split: train
+  val_split: test
+  pass_name: clean
+  camera: left
+  image_size: [256, 256]
+  reverse_flow: false
+  normalize_rgb: true
+  batch_size: 16
+  val_batch_size: 16
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: true
+  drop_last: true
+  normalize_flow: true
+  flow_scale: null
+  max_flow_magnitude: null
+  max_flow_magnitude_multiplier: 2.0
+
+paths:
+  snapshots: ./snapshots
