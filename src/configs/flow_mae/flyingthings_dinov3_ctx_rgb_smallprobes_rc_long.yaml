@@ -99,20 +99,5 @@ qualitative_probes:
     dino_features_root: /home/slow1/Data/precomputed/probes/tss_dinov3_vitb16_256x256
     dino_model_dir: /home/slow1/shared_models/dinov3-vitb16-pretrain-lvd1689m
     tss_root: /home/slow1/Data/correspondence/TSS_CVPR2016
-  - name: pfpascal
-    dataset_type: pfpascal
-    num_samples: 8
-    batch_size: 4
-    num_workers: 0
-    image_size: [256, 256]
-    reverse_flow: false
-    normalize_rgb: true
-    normalize_flow: true
-    dino_features_root: /home/slow1/Data/precomputed/probes/pfpascal_dinov3_vitb16_256x256
-    dino_model_dir: /home/slow1/shared_models/dinov3-vitb16-pretrain-lvd1689m
-    pfpascal_datapath: /home/slow1/Projects/motionMAE/models/Datasets_CATs
-    pfpascal_split: val
-    pfpascal_thres: img
-
 paths:
   snapshots: ./snapshots
