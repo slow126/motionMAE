@@ -32,8 +32,9 @@ class UniqueImageRecord:
 
 
 class UniqueImageDataset(Dataset):
-    def __init__(self, records: list[UniqueImageRecord]) -> None:
+    def __init__(self, records: list[UniqueImageRecord], image_size_hw: tuple[int, int]) -> None:
         self.records = records
+        self.image_size_hw = (int(image_size_hw[0]), int(image_size_hw[1]))
 
     def __len__(self) -> int:
         return len(self.records)
@@ -43,6 +44,8 @@ class UniqueImageDataset(Dataset):
         image_path = Path(record.image_abs_path)
         with Image.open(image_path) as image:
             image = image.convert("RGB")
+            if image.size != (self.image_size_hw[1], self.image_size_hw[0]):
+                image = image.resize((self.image_size_hw[1], self.image_size_hw[0]), Image.Resampling.BILINEAR)
             tensor = torch.from_numpy(np.array(image)).permute(2, 0, 1).float() / 255.0
         return {
             "image": tensor,
@@ -140,9 +143,15 @@ def write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
             handle.write("\n")
 
 
-def make_loader(records: list[UniqueImageRecord], batch_size: int, num_workers: int, pin_memory: bool) -> DataLoader:
+def make_loader(
+    records: list[UniqueImageRecord],
+    image_size_hw: tuple[int, int],
+    batch_size: int,
+    num_workers: int,
+    pin_memory: bool,
+) -> DataLoader:
     return DataLoader(
-        UniqueImageDataset(records),
+        UniqueImageDataset(records, image_size_hw=image_size_hw),
         batch_size=batch_size,
         shuffle=False,
         num_workers=num_workers,
@@ -408,6 +417,7 @@ def precompute_features(
 
     loader = make_loader(
         records=pending_records,
+        image_size_hw=image_size_hw,
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         pin_memory=False if args.no_pin_memory else bool(args.pin_memory or device.type == "cuda"),
