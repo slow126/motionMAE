@@ -1,0 +1,629 @@
+from __future__ import annotations
+
+import os
+from typing import Any, Optional
+
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
+import pytorch_lightning as pl
+import torch
+import torch.nn.functional as F
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, SequentialLR
+
+from .dino_context_consistency_model import (
+    FlowMAEDINOContextConsistencyModelConfig,
+    FlowMaskedAutoencoderDINOPrependedContextConsistencyViT,
+)
+
+IMAGENET_MEAN = torch.tensor([0.485, 0.456, 0.406], dtype=torch.float32).view(3, 1, 1)
+IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32).view(3, 1, 1)
+
+
+class FlowMAEDINOContextConsistencyLightningModule(pl.LightningModule):
+    def __init__(
+        self,
+        model_config: FlowMAEDINOContextConsistencyModelConfig,
+        training_config: dict[str, Any],
+        pointodyssey_probe_config: Optional[dict[str, Any]] = None,
+        qualitative_probe_configs: Optional[list[dict[str, Any]]] = None,
+    ) -> None:
+        super().__init__()
+        self.save_hyperparameters(
+            {
+                "model": vars(model_config),
+                "training": training_config,
+                "pointodyssey_probe": pointodyssey_probe_config,
+                "qualitative_probes": qualitative_probe_configs,
+            }
+        )
+        self.model = FlowMaskedAutoencoderDINOPrependedContextConsistencyViT(model_config)
+        self.training_config = training_config
+        self.pointodyssey_probe_config = pointodyssey_probe_config
+        self.qualitative_probe_configs = qualitative_probe_configs or []
+        self.example_batch = None
+        self._probe_dino = None
+
+    def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, Any]:
+        return self.model(
+            src_rgb=batch["src_rgb"],
+            tgt_rgb=batch["tgt_rgb"],
+            src_dino=batch["src_dino"],
+            tgt_dino=batch["tgt_dino"],
+            flow=batch["flow"],
+            valid=batch["valid"],
+            observed_valid_override=batch.get("observed_valid_override", None),
+        )
+
+    @staticmethod
+    def flow_to_rgb(flow: torch.Tensor) -> torch.Tensor:
+        flow = torch.nan_to_num(flow, nan=0.0, posinf=0.0, neginf=0.0).float()
+        u, v = flow[0], flow[1]
+        finite = torch.cat([u.reshape(-1), v.reshape(-1)])
+        finite = finite[torch.isfinite(finite)]
+        if finite.numel() == 0:
+            scale = torch.tensor(1.0, device=flow.device, dtype=flow.dtype)
+        else:
+            scale = torch.quantile(finite.abs(), 0.99)
+            if not torch.isfinite(scale) or scale.item() < 1e-6:
+                scale = torch.tensor(1.0, device=flow.device, dtype=flow.dtype)
+        rgb = torch.zeros((3, flow.shape[-2], flow.shape[-1]), device=flow.device, dtype=flow.dtype)
+        rgb[0] = (0.5 + u / (2.0 * scale)).clamp(0.0, 1.0)
+        rgb[1] = (0.5 + v / (2.0 * scale)).clamp(0.0, 1.0)
+        return rgb
+
+    @staticmethod
+    def denormalize_rgb(image: torch.Tensor) -> torch.Tensor:
+        mean = IMAGENET_MEAN.to(device=image.device, dtype=image.dtype)
+        std = IMAGENET_STD.to(device=image.device, dtype=image.dtype)
+        return (image * std + mean).clamp(0.0, 1.0)
+
+    @staticmethod
+    def mask_rgb_black(image: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        return image * mask.to(device=image.device, dtype=image.dtype).unsqueeze(0)
+
+    @staticmethod
+    def endpoint_error(pred: torch.Tensor, target: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        safe_target = torch.where(mask.unsqueeze(1) > 0, target, pred.detach())
+        epe = torch.linalg.vector_norm(pred - safe_target, dim=1)
+        denom = mask.sum().clamp_min(1.0)
+        return (epe * mask).sum() / denom
+
+    @staticmethod
+    def _pixel_space_flow(flow: torch.Tensor, flow_scale: torch.Tensor | None) -> torch.Tensor:
+        if flow_scale is None:
+            return flow
+        return flow * flow_scale.view(-1, 1, 1, 1).to(device=flow.device, dtype=flow.dtype)
+
+    @staticmethod
+    def variance_regularizer(z: torch.Tensor, eps: float = 1e-4, target_std: float = 1.0) -> torch.Tensor:
+        if z.shape[0] <= 1:
+            return z.new_zeros(())
+        std = torch.sqrt(z.var(dim=0, unbiased=False) + eps)
+        return torch.mean(F.relu(target_std - std))
+
+    @staticmethod
+    def dino_to_rgb_pca(tokens: torch.Tensor) -> torch.Tensor:
+        if tokens.dim() != 3:
+            raise ValueError(f"Expected [grid_h, grid_w, dim] DINO tokens, got {tuple(tokens.shape)}")
+        grid_h, grid_w, dim = tokens.shape
+        flat = tokens.reshape(grid_h * grid_w, dim).float()
+        flat = flat - flat.mean(dim=0, keepdim=True)
+
+        try:
+            _, _, v = torch.pca_lowrank(flat, q=min(3, flat.shape[0], flat.shape[1]))
+            projected = flat @ v[:, :3]
+        except RuntimeError:
+            projected = flat[:, :3]
+
+        if projected.shape[1] < 3:
+            projected = F.pad(projected, (0, 3 - projected.shape[1]))
+
+        projected = projected.reshape(grid_h, grid_w, 3)
+        projected = projected - projected.amin(dim=(0, 1), keepdim=True)
+        denom = projected.amax(dim=(0, 1), keepdim=True).clamp_min(1e-6)
+        projected = projected / denom
+        return projected.permute(2, 0, 1).contiguous()
+
+    def _get_probe_dino(self):
+        if self._probe_dino is not None:
+            return self._probe_dino
+        model_dir = None
+        if self.pointodyssey_probe_config:
+            model_dir = self.pointodyssey_probe_config.get("dino_model_dir")
+        if not model_dir:
+            for probe_cfg in self.qualitative_probe_configs:
+                model_dir = probe_cfg.get("dino_model_dir")
+                if model_dir:
+                    break
+        if not model_dir:
+            return None
+        from models.DinoV3.DinoV3 import DinoV3
+
+        resize_size = int(self.hparams["model"]["image_size"])
+        self._probe_dino = DinoV3(pretrained_model_name=str(model_dir), resize_size=resize_size)
+        try:
+            self._probe_dino.model.to(self.device)
+            self._probe_dino.model.eval()
+        except Exception:
+            pass
+        return self._probe_dino
+
+    def _augment_batch_with_dino(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        if "src_dino" in batch and "tgt_dino" in batch:
+            return batch
+        dino = self._get_probe_dino()
+        if dino is None:
+            raise RuntimeError("PointOdyssey probe requires dino_model_dir to compute probe DINO tokens.")
+        with torch.inference_mode():
+            src_dino = dino.get_spatial_features(batch["src_rgb"]).reshape(
+                batch["src_rgb"].shape[0],
+                self.model.grid_size,
+                self.model.grid_size,
+                -1,
+            )
+            tgt_dino = dino.get_spatial_features(batch["tgt_rgb"]).reshape(
+                batch["tgt_rgb"].shape[0],
+                self.model.grid_size,
+                self.model.grid_size,
+                -1,
+            )
+        batch = dict(batch)
+        batch["src_dino"] = src_dino
+        batch["tgt_dino"] = tgt_dino
+        return batch
+
+    def _compute_reconstruction_metrics(
+        self,
+        batch: dict[str, torch.Tensor],
+        outputs: dict[str, Any],
+    ) -> dict[str, torch.Tensor]:
+        pred_flow = outputs["pred_flow"]
+        flow_scale = batch.get("flow_scale")
+        valid = batch["valid"]
+        masked_pixels = outputs["masked_pixels"] * valid
+        observed_pixels = outputs["observed_pixels"] * valid
+        pred_flow_px = self._pixel_space_flow(pred_flow, flow_scale)
+        target_flow_px = self._pixel_space_flow(batch["flow"], flow_scale)
+        input_flow_px = self._pixel_space_flow(outputs["flow_input"], flow_scale)
+
+        if not torch.isfinite(pred_flow).all():
+            pred_finite = torch.isfinite(pred_flow)
+            raise RuntimeError(
+                "Non-finite tensors in reconstruction step: "
+                f"pred_finite_frac={float(pred_finite.float().mean().detach().cpu()):.6f}, "
+                f"input_abs_max={float(input_flow_px.abs().max().detach().cpu()):.4f}, "
+                f"target_abs_max={float(target_flow_px.abs().max().detach().cpu()):.4f}"
+            )
+
+        return {
+            "epe": self.endpoint_error(pred_flow_px, target_flow_px, valid),
+            "masked_epe": self.endpoint_error(pred_flow_px, target_flow_px, masked_pixels),
+            "observed_epe": self.endpoint_error(pred_flow_px, target_flow_px, observed_pixels),
+            "mask_ratio": masked_pixels.sum() / valid.sum().clamp_min(1.0),
+            "latent_norm": outputs["encoded_tokens"].norm(dim=-1).mean(),
+            "pair_latent_norm": outputs["pair_latent"].norm(dim=-1).mean(),
+            "pred_abs_max": pred_flow_px.abs().max(),
+            "target_abs_max": target_flow_px.abs().max(),
+            "input_abs_max": input_flow_px.abs().max(),
+            "pred_flow_px": pred_flow_px,
+            "target_flow_px": target_flow_px,
+            "input_flow_px": input_flow_px,
+        }
+
+    def _log_reconstruction_metrics(
+        self,
+        stage: str,
+        batch: dict[str, torch.Tensor],
+        outputs: dict[str, Any],
+        loss_value: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        metrics = self._compute_reconstruction_metrics(batch, outputs)
+        batch_size = batch["flow"].shape[0]
+
+        self.log(
+            f"{stage}/loss",
+            loss_value,
+            prog_bar=stage == "train",
+            on_step=stage == "train",
+            on_epoch=True,
+            batch_size=batch_size,
+        )
+        self.log(
+            f"{stage}_loss",
+            loss_value,
+            prog_bar=False,
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch_size,
+        )
+        self.log(f"{stage}/epe", metrics["epe"], prog_bar=stage != "train", on_step=False, on_epoch=True, batch_size=batch_size)
+        self.log(f"{stage}_epe", metrics["epe"], prog_bar=False, on_step=False, on_epoch=True, batch_size=batch_size)
+        self.log(f"{stage}/masked_epe", metrics["masked_epe"], on_step=False, on_epoch=True, batch_size=batch_size)
+        self.log(f"{stage}/observed_epe", metrics["observed_epe"], on_step=False, on_epoch=True, batch_size=batch_size)
+        self.log(f"{stage}/mask_ratio", metrics["mask_ratio"], on_step=False, on_epoch=True, batch_size=batch_size)
+        self.log(f"{stage}/latent_norm", metrics["latent_norm"], on_step=False, on_epoch=True, batch_size=batch_size)
+        self.log(f"{stage}/pair_latent_norm", metrics["pair_latent_norm"], on_step=False, on_epoch=True, batch_size=batch_size)
+        self.log(f"{stage}/pred_abs_max", metrics["pred_abs_max"], on_step=False, on_epoch=True, batch_size=batch_size)
+        self.log(f"{stage}/target_abs_max", metrics["target_abs_max"], on_step=False, on_epoch=True, batch_size=batch_size)
+        self.log(f"{stage}/input_abs_max", metrics["input_abs_max"], on_step=False, on_epoch=True, batch_size=batch_size)
+        return metrics
+
+    def training_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        valid = batch["valid"]
+        anchor_view = self.model.sample_anchor_observation(valid)
+        student_view = self.model.sample_student_observation(valid)
+
+        anchor_obs_flow = batch["flow"] * anchor_view["observed_valid"].unsqueeze(1)
+        student_obs_flow = batch["flow"] * student_view["observed_valid"].unsqueeze(1)
+
+        with torch.no_grad():
+            anchor_outputs = self.model.forward_branch(
+                src_rgb=batch["src_rgb"],
+                tgt_rgb=batch["tgt_rgb"],
+                src_dino=batch["src_dino"],
+                tgt_dino=batch["tgt_dino"],
+                observed_flow=anchor_obs_flow,
+                observed_valid=anchor_view["observed_valid"],
+                return_latent=True,
+                decode=False,
+            )
+
+        student_outputs = self.model.forward_branch(
+            src_rgb=batch["src_rgb"],
+            tgt_rgb=batch["tgt_rgb"],
+            src_dino=batch["src_dino"],
+            tgt_dino=batch["tgt_dino"],
+            observed_flow=student_obs_flow,
+            observed_valid=student_view["observed_valid"],
+            return_latent=True,
+            decode=True,
+        )
+
+        recon_mask = self.model.resolve_reconstruction_mask(valid, student_view["masked_pixels"])
+        loss_recon = self.model.compute_reconstruction_loss(student_outputs["pred_flow"], batch["flow"], recon_mask)
+        loss_align = F.mse_loss(student_outputs["projected_latent"], anchor_outputs["projected_latent"].detach())
+
+        lambda_align = float(self.training_config.get("lambda_align", 0.05))
+        lambda_var = float(self.training_config.get("lambda_var", 0.0))
+        var_eps = float(self.training_config.get("variance_eps", 1e-4))
+        var_target = float(self.training_config.get("variance_target_std", 1.0))
+        loss_var = self.variance_regularizer(student_outputs["projected_latent"], eps=var_eps, target_std=var_target)
+        loss_total = loss_recon + lambda_align * loss_align
+        if lambda_var > 0.0:
+            loss_total = loss_total + lambda_var * loss_var
+
+        outputs = dict(student_outputs)
+        outputs["loss"] = loss_total
+        outputs["masked_pixels"] = student_view["masked_pixels"]
+        outputs["observed_pixels"] = student_view["observed_valid"]
+        outputs["observed_valid"] = student_view["observed_valid"]
+        outputs["reconstruction_mask"] = recon_mask
+        outputs["is_full_mask"] = student_view["is_full_mask"]
+
+        metrics = self._log_reconstruction_metrics("train", batch, outputs, loss_total)
+        batch_size = batch["flow"].shape[0]
+        anchor_visible_ratio = anchor_view["visible_ratio"].mean()
+        student_visible_ratio = student_view["visible_ratio"].mean()
+        student_full_mask_fraction = student_view["is_full_mask"].mean()
+        latent_alignment = (student_outputs["projected_latent"] - anchor_outputs["projected_latent"]).pow(2).mean()
+
+        self.log("train/loss_recon", loss_recon, on_step=True, on_epoch=True, batch_size=batch_size)
+        self.log("train/loss_align", loss_align, on_step=True, on_epoch=True, batch_size=batch_size)
+        self.log("train/loss_var", loss_var, on_step=True, on_epoch=True, batch_size=batch_size)
+        self.log("train/anchor_visible_ratio", anchor_visible_ratio, on_step=False, on_epoch=True, batch_size=batch_size)
+        self.log("train/student_visible_ratio", student_visible_ratio, on_step=False, on_epoch=True, batch_size=batch_size)
+        self.log(
+            "train/student_full_mask_fraction",
+            student_full_mask_fraction,
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch_size,
+        )
+        self.log("train/projected_alignment_mse", latent_alignment, on_step=False, on_epoch=True, batch_size=batch_size)
+        self.log(
+            "train/projected_latent_norm",
+            student_outputs["projected_latent"].norm(dim=-1).mean(),
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch_size,
+        )
+        self.log(
+            "train/reconstruction_mask_ratio",
+            recon_mask.sum() / valid.sum().clamp_min(1.0),
+            on_step=False,
+            on_epoch=True,
+            batch_size=batch_size,
+        )
+
+        if not torch.isfinite(loss_total):
+            raise RuntimeError(
+                "Non-finite training loss: "
+                f"loss_total={float(loss_total.detach().cpu()):.6f}, "
+                f"loss_recon={float(loss_recon.detach().cpu()):.6f}, "
+                f"loss_align={float(loss_align.detach().cpu()):.6f}, "
+                f"masked_epe={float(metrics['masked_epe'].detach().cpu()):.6f}"
+            )
+        return loss_total
+
+    def validation_step(self, batch: dict[str, torch.Tensor], batch_idx: int) -> torch.Tensor:
+        outputs = self(batch)
+        metrics = self._log_reconstruction_metrics("val", batch, outputs, outputs["loss"])
+
+        if self.example_batch is None:
+            self.example_batch = {
+                "src_rgb": batch["src_rgb"].detach().cpu(),
+                "tgt_rgb": batch["tgt_rgb"].detach().cpu(),
+                "src_dino": batch["src_dino"].detach().cpu(),
+                "tgt_dino": batch["tgt_dino"].detach().cpu(),
+                "flow": metrics["target_flow_px"].detach().cpu(),
+                "valid": batch["valid"].detach().cpu(),
+                "pred_flow": metrics["pred_flow_px"].detach().cpu(),
+                "flow_input": metrics["input_flow_px"].detach().cpu(),
+                "observed_valid": outputs["observed_valid"].detach().cpu(),
+            }
+        return outputs["loss"]
+
+    def on_validation_epoch_start(self) -> None:
+        self.example_batch = None
+
+    def on_validation_epoch_end(self) -> None:
+        if self.logger is None:
+            return
+        if self.example_batch is not None:
+            max_images = int(self.training_config.get("tb_log_images", 4))
+            if max_images > 0:
+                figures = []
+                count = min(max_images, self.example_batch["flow"].shape[0])
+                for idx in range(count):
+                    fig = self._build_figure(idx)
+                    figures.append(fig)
+                    self.logger.experiment.add_figure(f"val/examples_{idx}", fig, global_step=self.current_epoch)
+                for fig in figures:
+                    plt.close(fig)
+        self._run_pointodyssey_probe()
+        self._run_qualitative_probes()
+
+    def _build_figure(self, idx: int) -> plt.Figure:
+        src_rgb = self.denormalize_rgb(self.example_batch["src_rgb"][idx])
+        tgt_rgb = self.denormalize_rgb(self.example_batch["tgt_rgb"][idx])
+        src_dino_rgb = self.dino_to_rgb_pca(self.example_batch["src_dino"][idx])
+        tgt_dino_rgb = self.dino_to_rgb_pca(self.example_batch["tgt_dino"][idx])
+        observed_valid = self.example_batch["observed_valid"][idx]
+        input_rgb = self.mask_rgb_black(self.flow_to_rgb(self.example_batch["flow_input"][idx]), observed_valid)
+        gt_rgb = self.flow_to_rgb(self.example_batch["flow"][idx])
+        pred_rgb = self.flow_to_rgb(self.example_batch["pred_flow"][idx])
+        valid_rgb = observed_valid.unsqueeze(0).repeat(3, 1, 1)
+
+        fig, axes = plt.subplots(2, 4, figsize=(15, 8), dpi=130)
+        panels = [
+            ("Source RGB", src_rgb),
+            ("Target RGB", tgt_rgb),
+            ("Source DINO PCA", src_dino_rgb),
+            ("Target DINO PCA", tgt_dino_rgb),
+            ("Observed Flow", input_rgb),
+            ("Ground Truth", gt_rgb),
+            ("Prediction", pred_rgb),
+            ("Observed Mask", valid_rgb),
+        ]
+        for ax, (title, image) in zip(axes.flat, panels):
+            ax.imshow(np.transpose(image.numpy(), (1, 2, 0)))
+            ax.set_title(title, fontsize=8)
+            ax.set_xticks([])
+            ax.set_yticks([])
+        fig.suptitle("DINO-context consistency MAE validation", fontsize=10)
+        fig.tight_layout()
+        return fig
+
+    def _run_pointodyssey_probe(self) -> None:
+        datamodule = getattr(self.trainer, "datamodule", None)
+        if datamodule is None or not hasattr(datamodule, "get_pointodyssey_probe_dataloader"):
+            return
+        probe_loader = datamodule.get_pointodyssey_probe_dataloader()
+        if probe_loader is None:
+            return
+
+        max_images = int(self.training_config.get("pointodyssey_probe_log_images", 4))
+        if max_images <= 0:
+            return
+
+        probe_examples = []
+        with torch.no_grad():
+            for batch in probe_loader:
+                batch = {
+                    key: value.to(self.device, non_blocking=True) if isinstance(value, torch.Tensor) else value
+                    for key, value in batch.items()
+                }
+                batch = self._augment_batch_with_dino(batch)
+                outputs = self(batch)
+                pred_flow_px = self._pixel_space_flow(outputs["pred_flow"], batch.get("flow_scale"))
+                input_flow_px = self._pixel_space_flow(outputs["flow_input"], batch.get("flow_scale"))
+                for idx in range(pred_flow_px.shape[0]):
+                    probe_examples.append(
+                        {
+                            "src_rgb": batch["src_rgb"][idx].detach().cpu(),
+                            "tgt_rgb": batch["tgt_rgb"][idx].detach().cpu(),
+                            "src_dino": batch["src_dino"][idx].detach().cpu(),
+                            "tgt_dino": batch["tgt_dino"][idx].detach().cpu(),
+                            "pred_flow": pred_flow_px[idx].detach().cpu(),
+                            "flow_input": input_flow_px[idx].detach().cpu(),
+                            "observed_valid": outputs["observed_valid"][idx].detach().cpu(),
+                        }
+                    )
+                    if len(probe_examples) >= max_images:
+                        break
+                if len(probe_examples) >= max_images:
+                    break
+
+        if not probe_examples:
+            return
+
+        observed_fraction = float(np.mean([example["observed_valid"].float().mean().item() for example in probe_examples]))
+        self.log(
+            "pointodyssey_probe/observed_fraction",
+            observed_fraction,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=False,
+            logger=True,
+        )
+        figures = []
+        for idx, example in enumerate(probe_examples):
+            fig = self._build_probe_figure(example)
+            figures.append(fig)
+            self.logger.experiment.add_figure(f"pointodyssey_probe/examples_{idx}", fig, global_step=self.current_epoch)
+        for fig in figures:
+            plt.close(fig)
+
+    def _build_probe_figure(self, example: dict[str, torch.Tensor]) -> plt.Figure:
+        src_rgb = self.denormalize_rgb(example["src_rgb"])
+        tgt_rgb = self.denormalize_rgb(example["tgt_rgb"])
+        src_dino_rgb = self.dino_to_rgb_pca(example["src_dino"])
+        tgt_dino_rgb = self.dino_to_rgb_pca(example["tgt_dino"])
+        input_rgb = self.mask_rgb_black(self.flow_to_rgb(example["flow_input"]), example["observed_valid"])
+        pred_rgb = self.flow_to_rgb(example["pred_flow"])
+
+        fig, axes = plt.subplots(2, 3, figsize=(12, 8), dpi=130)
+        panels = [
+            ("Source RGB", src_rgb),
+            ("Target RGB", tgt_rgb),
+            ("Source DINO PCA", src_dino_rgb),
+            ("Target DINO PCA", tgt_dino_rgb),
+            ("Observed Flow", input_rgb),
+            ("Prediction", pred_rgb),
+        ]
+        for ax, (title, image) in zip(axes.flat[:6], panels):
+            ax.imshow(np.transpose(image.numpy(), (1, 2, 0)))
+            ax.set_title(title, fontsize=8)
+            ax.set_xticks([])
+            ax.set_yticks([])
+        fig.suptitle("PointOdyssey probe", fontsize=10)
+        fig.tight_layout()
+        return fig
+
+    def _run_qualitative_probes(self) -> None:
+        datamodule = getattr(self.trainer, "datamodule", None)
+        if datamodule is None or not hasattr(datamodule, "get_qualitative_probe_dataloaders"):
+            return
+        probe_loaders = datamodule.get_qualitative_probe_dataloaders()
+        if not probe_loaders:
+            return
+
+        max_images = int(self.training_config.get("qualitative_probe_log_images", 4))
+        if max_images <= 0:
+            return
+
+        for probe_name, probe_loader in probe_loaders.items():
+            probe_examples = []
+            with torch.no_grad():
+                for batch in probe_loader:
+                    batch = {
+                        key: value.to(self.device, non_blocking=True) if isinstance(value, torch.Tensor) else value
+                        for key, value in batch.items()
+                    }
+                    batch = self._augment_batch_with_dino(batch)
+                    outputs = self(batch)
+                    pred_flow_px = self._pixel_space_flow(outputs["pred_flow"], batch.get("flow_scale"))
+                    input_flow_px = self._pixel_space_flow(outputs["flow_input"], batch.get("flow_scale"))
+                    target_flow_px = self._pixel_space_flow(batch["flow"], batch.get("flow_scale"))
+                    for idx in range(pred_flow_px.shape[0]):
+                        probe_examples.append(
+                            {
+                                "src_rgb": batch["src_rgb"][idx].detach().cpu(),
+                                "tgt_rgb": batch["tgt_rgb"][idx].detach().cpu(),
+                                "src_dino": batch["src_dino"][idx].detach().cpu(),
+                                "tgt_dino": batch["tgt_dino"][idx].detach().cpu(),
+                                "pred_flow": pred_flow_px[idx].detach().cpu(),
+                                "flow_input": input_flow_px[idx].detach().cpu(),
+                                "target_flow": target_flow_px[idx].detach().cpu(),
+                                "observed_valid": outputs["observed_valid"][idx].detach().cpu(),
+                                "valid": batch["valid"][idx].detach().cpu(),
+                            }
+                        )
+                        if len(probe_examples) >= max_images:
+                            break
+                    if len(probe_examples) >= max_images:
+                        break
+
+            if not probe_examples:
+                continue
+
+            observed_fraction = float(np.mean([example["observed_valid"].float().mean().item() for example in probe_examples]))
+            self.log(
+                f"qualitative_probe/{probe_name}/observed_fraction",
+                observed_fraction,
+                on_step=False,
+                on_epoch=True,
+                prog_bar=False,
+                logger=True,
+            )
+            figures = []
+            for idx, example in enumerate(probe_examples):
+                fig = self._build_qualitative_probe_figure(probe_name, example)
+                figures.append(fig)
+                self.logger.experiment.add_figure(
+                    f"qualitative_probe/{probe_name}/examples_{idx}",
+                    fig,
+                    global_step=self.current_epoch,
+                )
+            for fig in figures:
+                plt.close(fig)
+
+    def _build_qualitative_probe_figure(self, probe_name: str, example: dict[str, torch.Tensor]) -> plt.Figure:
+        src_rgb = self.denormalize_rgb(example["src_rgb"])
+        tgt_rgb = self.denormalize_rgb(example["tgt_rgb"])
+        src_dino_rgb = self.dino_to_rgb_pca(example["src_dino"])
+        tgt_dino_rgb = self.dino_to_rgb_pca(example["tgt_dino"])
+        observed_valid = example["observed_valid"]
+        input_rgb = self.mask_rgb_black(self.flow_to_rgb(example["flow_input"]), observed_valid)
+        gt_rgb = self.mask_rgb_black(self.flow_to_rgb(example["target_flow"]), example["valid"])
+        pred_rgb = self.flow_to_rgb(example["pred_flow"])
+        valid_rgb = observed_valid.unsqueeze(0).repeat(3, 1, 1)
+
+        fig, axes = plt.subplots(2, 4, figsize=(15, 8), dpi=130)
+        panels = [
+            ("Source RGB", src_rgb),
+            ("Target RGB", tgt_rgb),
+            ("Source DINO PCA", src_dino_rgb),
+            ("Target DINO PCA", tgt_dino_rgb),
+            ("Observed Flow", input_rgb),
+            ("Ground Truth", gt_rgb),
+            ("Prediction", pred_rgb),
+            ("Observed Mask", valid_rgb),
+        ]
+        for ax, (title, image) in zip(axes.flat, panels):
+            ax.imshow(np.transpose(image.numpy(), (1, 2, 0)))
+            ax.set_title(title, fontsize=8)
+            ax.set_xticks([])
+            ax.set_yticks([])
+        fig.suptitle(f"{probe_name} probe", fontsize=10)
+        fig.tight_layout()
+        return fig
+
+    def configure_optimizers(self) -> dict[str, Any]:
+        lr = float(self.training_config.get("lr", 3e-4))
+        weight_decay = float(self.training_config.get("weight_decay", 0.05))
+        optimizer = AdamW(self.parameters(), lr=lr, weight_decay=weight_decay)
+
+        warmup_epochs = int(self.training_config.get("warmup_epochs", 0))
+        max_epochs = int(self.training_config.get("max_epochs", 1))
+        min_lr = float(self.training_config.get("min_lr", 1e-6))
+        if warmup_epochs > 0 and max_epochs > warmup_epochs:
+            warmup = LinearLR(optimizer, start_factor=0.1, total_iters=warmup_epochs)
+            cosine = CosineAnnealingLR(optimizer, T_max=max_epochs - warmup_epochs, eta_min=min_lr)
+            scheduler = SequentialLR(optimizer, schedulers=[warmup, cosine], milestones=[warmup_epochs])
+        else:
+            scheduler = CosineAnnealingLR(optimizer, T_max=max(1, max_epochs), eta_min=min_lr)
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "epoch",
+                "frequency": 1,
+            },
+        }
