@@ -14,6 +14,7 @@ class FlowMAEDINOContextModelConfig:
     image_size: int = 256
     patch_size: int = 16
     rgb_channels: int = 6
+    use_rgb_inputs: bool = True
     flow_channels: int = 2
     valid_channels: int = 1
     context_feature_dim: int = 768
@@ -141,8 +142,13 @@ class FlowMaskedAutoencoderDINOPrependedContextViT(nn.Module):
         self.flow_patch_dim = int(config.flow_channels) * patch_size * patch_size
         self.context_feature_dim = int(config.context_feature_dim)
 
+        self.local_in_channels = (
+            (int(config.rgb_channels) if bool(config.use_rgb_inputs) else 0)
+            + int(config.flow_channels)
+            + int(config.valid_channels)
+        )
         self.local_embed = PatchEmbed(
-            int(config.rgb_channels + config.flow_channels + config.valid_channels),
+            self.local_in_channels,
             patch_size,
             int(config.encoder_dim),
         )
@@ -338,9 +344,16 @@ class FlowMaskedAutoencoderDINOPrependedContextViT(nn.Module):
         bsz, _, height, width = flow.shape
         if height != self.image_size or width != self.image_size:
             raise ValueError(f"Expected {self.image_size}x{self.image_size} inputs, got {height}x{width}")
-        rgb = torch.cat([src_rgb, tgt_rgb], dim=1)
+        if bool(self.config.use_rgb_inputs):
+            rgb = torch.cat([src_rgb, tgt_rgb], dim=1)
+        else:
+            rgb = None
         observed_flow = flow * observed_valid.unsqueeze(1)
-        local_input = torch.cat([rgb, observed_flow, observed_valid.unsqueeze(1)], dim=1)
+        pieces = []
+        if rgb is not None:
+            pieces.append(rgb)
+        pieces.extend([observed_flow, observed_valid.unsqueeze(1)])
+        local_input = torch.cat(pieces, dim=1)
         return local_input
 
     def flatten_context_tokens(self, context: torch.Tensor) -> torch.Tensor:
@@ -428,7 +441,11 @@ class FlowMaskedAutoencoderDINOPrependedContextViT(nn.Module):
             "masked_pixels": masked_pixels,
             "observed_pixels": observed_valid,
             "observed_valid": observed_valid,
-            "flow_input": local_input[:, int(self.config.rgb_channels):int(self.config.rgb_channels) + int(self.config.flow_channels)],
+            "flow_input": local_input[
+                :,
+                (int(self.config.rgb_channels) if bool(self.config.use_rgb_inputs) else 0):
+                (int(self.config.rgb_channels) if bool(self.config.use_rgb_inputs) else 0) + int(self.config.flow_channels),
+            ],
             "encoded_tokens": encoded_local_tokens,
             "context_tokens": context_tokens,
         }

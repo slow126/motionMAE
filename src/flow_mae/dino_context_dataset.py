@@ -9,7 +9,12 @@ import pytorch_lightning as pl
 import torch
 from torch.utils.data import DataLoader
 
-from .dataset import FlyingThingsFlowMAEConfig, FlyingThingsFlowMAEDataset
+from .dataset import (
+    FlyingThingsFlowMAEConfig,
+    FlyingThingsFlowMAEDataset,
+    PointOdysseyProbeConfig,
+    PointOdysseyProbeDataset,
+)
 
 
 def _dataset_root_from_argument(root: str | Path) -> Path:
@@ -135,11 +140,17 @@ class FlyingThingsDINOFlowMAEDataset(FlyingThingsFlowMAEDataset):
 
 
 class FlyingThingsDINOFlowMAEDataModule(pl.LightningDataModule):
-    def __init__(self, config: FlyingThingsDINOFlowMAEConfig) -> None:
+    def __init__(
+        self,
+        config: FlyingThingsDINOFlowMAEConfig,
+        pointodyssey_probe_config: Optional[PointOdysseyProbeConfig] = None,
+    ) -> None:
         super().__init__()
         self.config = config
+        self.pointodyssey_probe_config = pointodyssey_probe_config
         self.train_dataset: Optional[FlyingThingsDINOFlowMAEDataset] = None
         self.val_dataset: Optional[FlyingThingsDINOFlowMAEDataset] = None
+        self.pointodyssey_probe_dataset: Optional[PointOdysseyProbeDataset] = None
 
     def setup(self, stage: Optional[str] = None) -> None:
         if stage in (None, "fit"):
@@ -181,6 +192,13 @@ class FlyingThingsDINOFlowMAEDataModule(pl.LightningDataModule):
                 f"dino_grid={self.train_dataset.dino_grid_hw} "
                 f"dino_dim={self.train_dataset.dino_feature_dim}"
             )
+            if self.pointodyssey_probe_config is not None:
+                self.pointodyssey_probe_dataset = PointOdysseyProbeDataset(self.pointodyssey_probe_config)
+                print(
+                    "[FlowMAEDINODataModule] "
+                    f"pointodyssey_probe_samples={len(self.pointodyssey_probe_dataset)} "
+                    f"manifest={self.pointodyssey_probe_config.manifest_path}"
+                )
 
     def train_dataloader(self) -> DataLoader:
         if self.train_dataset is None:
@@ -210,6 +228,24 @@ class FlyingThingsDINOFlowMAEDataModule(pl.LightningDataModule):
         return DataLoader(
             self.val_dataset,
             batch_size=int(self.config.val_batch_size),
+            shuffle=False,
+            num_workers=num_workers,
+            pin_memory=bool(self.config.pin_memory),
+            persistent_workers=bool(num_workers > 0 and self.config.persistent_workers),
+            drop_last=False,
+            **kwargs,
+        )
+
+    def get_pointodyssey_probe_dataloader(self) -> Optional[DataLoader]:
+        if self.pointodyssey_probe_dataset is None or self.pointodyssey_probe_config is None:
+            return None
+        num_workers = int(self.pointodyssey_probe_config.num_workers)
+        kwargs = {}
+        if num_workers > 0 and self.pointodyssey_probe_config.prefetch_factor is not None:
+            kwargs["prefetch_factor"] = int(self.pointodyssey_probe_config.prefetch_factor)
+        return DataLoader(
+            self.pointodyssey_probe_dataset,
+            batch_size=int(self.pointodyssey_probe_config.batch_size),
             shuffle=False,
             num_workers=num_workers,
             pin_memory=bool(self.config.pin_memory),

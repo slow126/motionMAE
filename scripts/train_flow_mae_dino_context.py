@@ -27,6 +27,7 @@ from src.flow_mae.dino_context_dataset import (
 )
 from src.flow_mae.dino_context_lightning import FlowMAEDINOContextLightningModule
 from src.flow_mae.dino_context_model import FlowMAEDINOContextModelConfig
+from src.flow_mae.dataset import PointOdysseyProbeConfig, materialize_probe_manifest
 
 
 def load_config(path: str) -> dict[str, Any]:
@@ -64,6 +65,7 @@ def main() -> None:
     training_config = config["training"]
     model_config = dict(config["model"])
     data_config = config["data"]
+    pointodyssey_probe_config = config.get("pointodyssey_probe", None)
 
     seed = int(training_config.get("seed", 2021))
     set_seed(seed)
@@ -76,7 +78,49 @@ def main() -> None:
         if hasattr(torch, "set_float32_matmul_precision"):
             torch.set_float32_matmul_precision(str(training_config.get("float32_matmul_precision", "high")))
 
-    datamodule = FlyingThingsDINOFlowMAEDataModule(FlyingThingsDINOFlowMAEConfig(**data_config))
+    run_dir = make_run_dir(config, args.config)
+    with open(run_dir / "config.yaml", "w", encoding="utf-8") as handle:
+        yaml.safe_dump(config, handle, sort_keys=False)
+    print(f"[train_flow_mae_dino_context] run_dir={run_dir}")
+
+    probe_cfg = None
+    probe_cfg_dict = None
+    if pointodyssey_probe_config and pointodyssey_probe_config.get("enabled", False):
+        materialized_probe_manifest = materialize_probe_manifest(
+            source_manifest_path=pointodyssey_probe_config["source_manifest_path"],
+            output_manifest_path=str(run_dir / "pointodyssey_probe_manifest.jsonl"),
+            num_samples=int(pointodyssey_probe_config.get("num_samples", 8)),
+            subset_indices_path=pointodyssey_probe_config.get("subset_indices_path", None),
+            min_valid_points=pointodyssey_probe_config.get("min_valid_points", None),
+            max_pairs_per_sequence=pointodyssey_probe_config.get("max_pairs_per_sequence", None),
+        )
+        pointodyssey_probe_config = dict(pointodyssey_probe_config)
+        pointodyssey_probe_config["manifest_path"] = materialized_probe_manifest
+        pointodyssey_probe_config.pop("source_manifest_path", None)
+        pointodyssey_probe_config.pop("subset_indices_path", None)
+        pointodyssey_probe_config.pop("max_pairs_per_sequence", None)
+        pointodyssey_probe_config.pop("enabled", None)
+        pointodyssey_probe_config.setdefault("image_size", data_config.get("image_size", [256, 256]))
+        pointodyssey_probe_config.setdefault("normalize_rgb", data_config.get("normalize_rgb", True))
+        pointodyssey_probe_config.setdefault("normalize_flow", data_config.get("normalize_flow", True))
+        pointodyssey_probe_config.setdefault("flow_scale", data_config.get("flow_scale", None))
+        pointodyssey_probe_config.setdefault("max_flow_magnitude", data_config.get("max_flow_magnitude", None))
+        pointodyssey_probe_config.setdefault(
+            "max_flow_magnitude_multiplier",
+            data_config.get("max_flow_magnitude_multiplier", 2.0),
+        )
+        probe_cfg = PointOdysseyProbeConfig(**pointodyssey_probe_config)
+        probe_cfg_dict = pointodyssey_probe_config
+        print(
+            "[train_flow_mae_dino_context] "
+            f"pointodyssey_probe_manifest={materialized_probe_manifest} "
+            f"num_samples={probe_cfg.num_samples}"
+        )
+
+    datamodule = FlyingThingsDINOFlowMAEDataModule(
+        FlyingThingsDINOFlowMAEConfig(**data_config),
+        pointodyssey_probe_config=probe_cfg,
+    )
     datamodule.setup("fit")
     if datamodule.train_dataset is None:
         raise RuntimeError("Failed to initialize training dataset.")
@@ -96,10 +140,6 @@ def main() -> None:
         )
     model_config["context_feature_dim"] = dino_feature_dim
 
-    run_dir = make_run_dir(config, args.config)
-    with open(run_dir / "config.yaml", "w", encoding="utf-8") as handle:
-        yaml.safe_dump(config, handle, sort_keys=False)
-    print(f"[train_flow_mae_dino_context] run_dir={run_dir}")
     print(
         "[train_flow_mae_dino_context] "
         f"precision={training_config.get('precision')} "
@@ -113,6 +153,7 @@ def main() -> None:
     lightning_module = FlowMAEDINOContextLightningModule(
         model_config=FlowMAEDINOContextModelConfig(**model_config),
         training_config=training_config,
+        pointodyssey_probe_config=probe_cfg_dict,
     )
 
     logger = TensorBoardLogger(save_dir=str(run_dir), name="tensorboard", version="")

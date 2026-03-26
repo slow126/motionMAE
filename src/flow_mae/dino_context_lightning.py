@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Optional
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
@@ -25,17 +25,25 @@ IMAGENET_STD = torch.tensor([0.229, 0.224, 0.225], dtype=torch.float32).view(3, 
 
 
 class FlowMAEDINOContextLightningModule(pl.LightningModule):
-    def __init__(self, model_config: FlowMAEDINOContextModelConfig, training_config: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        model_config: FlowMAEDINOContextModelConfig,
+        training_config: dict[str, Any],
+        pointodyssey_probe_config: Optional[dict[str, Any]] = None,
+    ) -> None:
         super().__init__()
         self.save_hyperparameters(
             {
                 "model": vars(model_config),
                 "training": training_config,
+                "pointodyssey_probe": pointodyssey_probe_config,
             }
         )
         self.model = FlowMaskedAutoencoderDINOPrependedContextViT(model_config)
         self.training_config = training_config
+        self.pointodyssey_probe_config = pointodyssey_probe_config
         self.example_batch = None
+        self._probe_dino = None
 
     def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, Any]:
         return self.model(
@@ -111,6 +119,39 @@ class FlowMAEDINOContextLightningModule(pl.LightningModule):
         projected = projected / denom
         return projected.permute(2, 0, 1).contiguous()
 
+    def _get_probe_dino(self):
+        if self._probe_dino is not None:
+            return self._probe_dino
+        if not self.pointodyssey_probe_config:
+            return None
+        model_dir = self.pointodyssey_probe_config.get("dino_model_dir")
+        if not model_dir:
+            return None
+        from models.DinoV3.DinoV3 import DinoV3
+
+        resize_size = int(self.hparams["model"]["image_size"])
+        self._probe_dino = DinoV3(pretrained_model_name=str(model_dir), resize_size=resize_size)
+        try:
+            self._probe_dino.model.to(self.device)
+            self._probe_dino.model.eval()
+        except Exception:
+            pass
+        return self._probe_dino
+
+    def _augment_batch_with_dino(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+        if "src_dino" in batch and "tgt_dino" in batch:
+            return batch
+        dino = self._get_probe_dino()
+        if dino is None:
+            raise RuntimeError("PointOdyssey probe requires dino_model_dir to compute probe DINO tokens.")
+        with torch.inference_mode():
+            src_dino = dino.get_spatial_features(batch["src_rgb"]).reshape(batch["src_rgb"].shape[0], self.model.grid_size, self.model.grid_size, -1)
+            tgt_dino = dino.get_spatial_features(batch["tgt_rgb"]).reshape(batch["tgt_rgb"].shape[0], self.model.grid_size, self.model.grid_size, -1)
+        batch = dict(batch)
+        batch["src_dino"] = src_dino
+        batch["tgt_dino"] = tgt_dino
+        return batch
+
     def _shared_step(self, batch: dict[str, torch.Tensor], stage: str) -> torch.Tensor:
         outputs = self(batch)
         pred_flow = outputs["pred_flow"]
@@ -178,19 +219,20 @@ class FlowMAEDINOContextLightningModule(pl.LightningModule):
         self.example_batch = None
 
     def on_validation_epoch_end(self) -> None:
-        if self.logger is None or self.example_batch is None:
+        if self.logger is None:
             return
-        max_images = int(self.training_config.get("tb_log_images", 4))
-        if max_images <= 0:
-            return
-        figures = []
-        count = min(max_images, self.example_batch["flow"].shape[0])
-        for idx in range(count):
-            fig = self._build_figure(idx)
-            figures.append(fig)
-            self.logger.experiment.add_figure(f"val/examples_{idx}", fig, global_step=self.current_epoch)
-        for fig in figures:
-            plt.close(fig)
+        if self.example_batch is not None:
+            max_images = int(self.training_config.get("tb_log_images", 4))
+            if max_images > 0:
+                figures = []
+                count = min(max_images, self.example_batch["flow"].shape[0])
+                for idx in range(count):
+                    fig = self._build_figure(idx)
+                    figures.append(fig)
+                    self.logger.experiment.add_figure(f"val/examples_{idx}", fig, global_step=self.current_epoch)
+                for fig in figures:
+                    plt.close(fig)
+        self._run_pointodyssey_probe()
 
     def _build_figure(self, idx: int) -> plt.Figure:
         src_rgb = self.denormalize_rgb(self.example_batch["src_rgb"][idx])
@@ -223,6 +265,92 @@ class FlowMAEDINOContextLightningModule(pl.LightningModule):
             ax.set_xticks([])
             ax.set_yticks([])
         fig.suptitle("Hybrid RGB + DINO context flow reconstruction", fontsize=10)
+        fig.tight_layout()
+        return fig
+
+    def _run_pointodyssey_probe(self) -> None:
+        datamodule = getattr(self.trainer, "datamodule", None)
+        if datamodule is None or not hasattr(datamodule, "get_pointodyssey_probe_dataloader"):
+            return
+        probe_loader = datamodule.get_pointodyssey_probe_dataloader()
+        if probe_loader is None:
+            return
+
+        max_images = int(self.training_config.get("pointodyssey_probe_log_images", 4))
+        if max_images <= 0:
+            return
+
+        probe_examples = []
+        with torch.no_grad():
+            for batch in probe_loader:
+                batch = {
+                    key: value.to(self.device, non_blocking=True) if isinstance(value, torch.Tensor) else value
+                    for key, value in batch.items()
+                }
+                batch = self._augment_batch_with_dino(batch)
+                outputs = self(batch)
+                pred_flow_px = self._pixel_space_flow(outputs["pred_flow"], batch.get("flow_scale"))
+                input_flow_px = self._pixel_space_flow(outputs["flow_input"], batch.get("flow_scale"))
+                for idx in range(pred_flow_px.shape[0]):
+                    probe_examples.append(
+                        {
+                            "src_rgb": batch["src_rgb"][idx].detach().cpu(),
+                            "tgt_rgb": batch["tgt_rgb"][idx].detach().cpu(),
+                            "src_dino": batch["src_dino"][idx].detach().cpu(),
+                            "tgt_dino": batch["tgt_dino"][idx].detach().cpu(),
+                            "pred_flow": pred_flow_px[idx].detach().cpu(),
+                            "flow_input": input_flow_px[idx].detach().cpu(),
+                            "observed_valid": outputs["observed_valid"][idx].detach().cpu(),
+                        }
+                    )
+                    if len(probe_examples) >= max_images:
+                        break
+                if len(probe_examples) >= max_images:
+                    break
+
+        if not probe_examples:
+            return
+
+        observed_fraction = float(np.mean([example["observed_valid"].float().mean().item() for example in probe_examples]))
+        self.log(
+            "pointodyssey_probe/observed_fraction",
+            observed_fraction,
+            on_step=False,
+            on_epoch=True,
+            prog_bar=False,
+            logger=True,
+        )
+        figures = []
+        for idx, example in enumerate(probe_examples):
+            fig = self._build_probe_figure(example)
+            figures.append(fig)
+            self.logger.experiment.add_figure(f"pointodyssey_probe/examples_{idx}", fig, global_step=self.current_epoch)
+        for fig in figures:
+            plt.close(fig)
+
+    def _build_probe_figure(self, example: dict[str, torch.Tensor]) -> plt.Figure:
+        src_rgb = self.denormalize_rgb(example["src_rgb"])
+        tgt_rgb = self.denormalize_rgb(example["tgt_rgb"])
+        src_dino_rgb = self.dino_to_rgb_pca(example["src_dino"])
+        tgt_dino_rgb = self.dino_to_rgb_pca(example["tgt_dino"])
+        input_rgb = self.mask_rgb_black(self.flow_to_rgb(example["flow_input"]), example["observed_valid"])
+        pred_rgb = self.flow_to_rgb(example["pred_flow"])
+
+        fig, axes = plt.subplots(2, 3, figsize=(12, 8), dpi=130)
+        panels = [
+            ("Source RGB", src_rgb),
+            ("Target RGB", tgt_rgb),
+            ("Source DINO PCA", src_dino_rgb),
+            ("Target DINO PCA", tgt_dino_rgb),
+            ("Observed Flow", input_rgb),
+            ("Prediction", pred_rgb),
+        ]
+        for ax, (title, image) in zip(axes.flat[:6], panels):
+            ax.imshow(np.transpose(image.numpy(), (1, 2, 0)))
+            ax.set_title(title, fontsize=8)
+            ax.set_xticks([])
+            ax.set_yticks([])
+        fig.suptitle("PointOdyssey probe", fontsize=10)
         fig.tight_layout()
         return fig
 
