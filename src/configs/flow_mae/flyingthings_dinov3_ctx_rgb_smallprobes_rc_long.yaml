@@ -1,0 +1,118 @@
+experiment:
+  name: flyingthings_flow_mae_dinov3_ctx_rgb_smallprobes_long
+  description: >-
+    Long-running RC FlyingThings masked flow MAE with fused local RGB+flow tokens, prepended
+    DINOv3 context, and qualitative KITTI/TSS/PF-Pascal probes during validation.
+
+model:
+  image_size: 256
+  patch_size: 16
+  rgb_channels: 6
+  use_rgb_inputs: true
+  flow_channels: 2
+  valid_channels: 1
+  context_feature_dim: 768
+  encoder_dim: 768
+  encoder_depth: 8
+  encoder_heads: 12
+  mlp_ratio: 4.0
+  decoder_dim: 512
+  decoder_depth: 4
+  decoder_heads: 8
+  dropout: 0.0
+  attention_dropout: 0.0
+  mask_ratio: 0.75
+  observation_mask_mode: scheduled
+  speckle_keep_ratio: 0.20
+  speckle_dilation_kernel: 1
+  scheduled_full_prob: 0.10
+  scheduled_none_prob: 0.45
+  loss: smooth_l1
+  smooth_l1_beta: 1.0
+
+training:
+  seed: 2021
+  max_epochs: 200
+  lr: 7.5e-5
+  min_lr: 1.0e-6
+  warmup_epochs: 5
+  weight_decay: 0.05
+  gradient_clip_val: 0.5
+  log_every_n_steps: 25
+  tb_log_images: 4
+  qualitative_probe_log_images: 4
+  num_sanity_val_steps: 2
+  precision: 32-true
+  devices: 1
+  allow_tf32: true
+  cudnn_benchmark: true
+  float32_matmul_precision: high
+
+data:
+  root: /home/slow1/Data/FlyingThings3D_Pytorch
+  dino_features_root: /home/slow1/Data/precomputed/flyingthings_dinov3_vitb16_256x256
+  dino_feature_subdir: features
+  train_split: train
+  val_split: test
+  pass_name: clean
+  camera: left
+  image_size: [256, 256]
+  reverse_flow: false
+  normalize_rgb: true
+  batch_size: 16
+  val_batch_size: 16
+  num_workers: 24
+  prefetch_factor: 4
+  pin_memory: true
+  persistent_workers: true
+  drop_last: true
+  normalize_flow: true
+  flow_scale: null
+  max_flow_magnitude: null
+  max_flow_magnitude_multiplier: 2.0
+
+qualitative_probes:
+  - name: kitti2015
+    dataset_type: kitti
+    num_samples: 8
+    batch_size: 4
+    num_workers: 0
+    image_size: [256, 256]
+    reverse_flow: false
+    normalize_rgb: true
+    normalize_flow: true
+    dino_features_root: /home/slow1/Data/precomputed/probes/kitti2015_dinov3_vitb16_256x256
+    dino_model_dir: /home/slow1/shared_models/dinov3-vitb16-pretrain-lvd1689m
+    kitti_root: /home/slow1/Data/correspondence/kitti/kitti-2015
+    kitti_split: training
+    kitti_version: 2015
+    kitti_occ_type: occ
+  - name: tss
+    dataset_type: tss
+    num_samples: 8
+    batch_size: 4
+    num_workers: 0
+    image_size: [256, 256]
+    reverse_flow: false
+    normalize_rgb: true
+    normalize_flow: true
+    dino_features_root: /home/slow1/Data/precomputed/probes/tss_dinov3_vitb16_256x256
+    dino_model_dir: /home/slow1/shared_models/dinov3-vitb16-pretrain-lvd1689m
+    tss_root: /home/slow1/Data/correspondence/TSS_CVPR2016
+  - name: pfpascal
+    dataset_type: pfpascal
+    num_samples: 8
+    batch_size: 4
+    num_workers: 0
+    image_size: [256, 256]
+    reverse_flow: false
+    normalize_rgb: true
+    normalize_flow: true
+    dino_features_root: /home/slow1/Data/precomputed/probes/pfpascal_dinov3_vitb16_256x256
+    dino_model_dir: /home/slow1/shared_models/dinov3-vitb16-pretrain-lvd1689m
+    pfpascal_datapath: /home/slow1/Projects/motionMAE/models/Datasets_CATs
+    pfpascal_split: val
+    pfpascal_thres: img
+
+paths:
+  snapshots: ./snapshots

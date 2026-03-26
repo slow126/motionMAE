@@ -30,6 +30,7 @@ class FlowMAEDINOContextLightningModule(pl.LightningModule):
         model_config: FlowMAEDINOContextModelConfig,
         training_config: dict[str, Any],
         pointodyssey_probe_config: Optional[dict[str, Any]] = None,
+        qualitative_probe_configs: Optional[list[dict[str, Any]]] = None,
     ) -> None:
         super().__init__()
         self.save_hyperparameters(
@@ -37,11 +38,13 @@ class FlowMAEDINOContextLightningModule(pl.LightningModule):
                 "model": vars(model_config),
                 "training": training_config,
                 "pointodyssey_probe": pointodyssey_probe_config,
+                "qualitative_probes": qualitative_probe_configs,
             }
         )
         self.model = FlowMaskedAutoencoderDINOPrependedContextViT(model_config)
         self.training_config = training_config
         self.pointodyssey_probe_config = pointodyssey_probe_config
+        self.qualitative_probe_configs = qualitative_probe_configs or []
         self.example_batch = None
         self._probe_dino = None
 
@@ -122,9 +125,14 @@ class FlowMAEDINOContextLightningModule(pl.LightningModule):
     def _get_probe_dino(self):
         if self._probe_dino is not None:
             return self._probe_dino
-        if not self.pointodyssey_probe_config:
-            return None
-        model_dir = self.pointodyssey_probe_config.get("dino_model_dir")
+        model_dir = None
+        if self.pointodyssey_probe_config:
+            model_dir = self.pointodyssey_probe_config.get("dino_model_dir")
+        if not model_dir:
+            for probe_cfg in self.qualitative_probe_configs:
+                model_dir = probe_cfg.get("dino_model_dir")
+                if model_dir:
+                    break
         if not model_dir:
             return None
         from models.DinoV3.DinoV3 import DinoV3
@@ -233,6 +241,7 @@ class FlowMAEDINOContextLightningModule(pl.LightningModule):
                 for fig in figures:
                     plt.close(fig)
         self._run_pointodyssey_probe()
+        self._run_qualitative_probes()
 
     def _build_figure(self, idx: int) -> plt.Figure:
         src_rgb = self.denormalize_rgb(self.example_batch["src_rgb"][idx])
@@ -351,6 +360,105 @@ class FlowMAEDINOContextLightningModule(pl.LightningModule):
             ax.set_xticks([])
             ax.set_yticks([])
         fig.suptitle("PointOdyssey probe", fontsize=10)
+        fig.tight_layout()
+        return fig
+
+    def _run_qualitative_probes(self) -> None:
+        datamodule = getattr(self.trainer, "datamodule", None)
+        if datamodule is None or not hasattr(datamodule, "get_qualitative_probe_dataloaders"):
+            return
+        probe_loaders = datamodule.get_qualitative_probe_dataloaders()
+        if not probe_loaders:
+            return
+
+        max_images = int(self.training_config.get("qualitative_probe_log_images", 4))
+        if max_images <= 0:
+            return
+
+        for probe_name, probe_loader in probe_loaders.items():
+            probe_examples = []
+            with torch.no_grad():
+                for batch in probe_loader:
+                    batch = {
+                        key: value.to(self.device, non_blocking=True) if isinstance(value, torch.Tensor) else value
+                        for key, value in batch.items()
+                    }
+                    batch = self._augment_batch_with_dino(batch)
+                    outputs = self(batch)
+                    pred_flow_px = self._pixel_space_flow(outputs["pred_flow"], batch.get("flow_scale"))
+                    input_flow_px = self._pixel_space_flow(outputs["flow_input"], batch.get("flow_scale"))
+                    target_flow_px = self._pixel_space_flow(batch["flow"], batch.get("flow_scale"))
+                    for idx in range(pred_flow_px.shape[0]):
+                        probe_examples.append(
+                            {
+                                "src_rgb": batch["src_rgb"][idx].detach().cpu(),
+                                "tgt_rgb": batch["tgt_rgb"][idx].detach().cpu(),
+                                "src_dino": batch["src_dino"][idx].detach().cpu(),
+                                "tgt_dino": batch["tgt_dino"][idx].detach().cpu(),
+                                "pred_flow": pred_flow_px[idx].detach().cpu(),
+                                "flow_input": input_flow_px[idx].detach().cpu(),
+                                "target_flow": target_flow_px[idx].detach().cpu(),
+                                "observed_valid": outputs["observed_valid"][idx].detach().cpu(),
+                                "valid": batch["valid"][idx].detach().cpu(),
+                            }
+                        )
+                        if len(probe_examples) >= max_images:
+                            break
+                    if len(probe_examples) >= max_images:
+                        break
+
+            if not probe_examples:
+                continue
+
+            observed_fraction = float(np.mean([example["observed_valid"].float().mean().item() for example in probe_examples]))
+            self.log(
+                f"qualitative_probe/{probe_name}/observed_fraction",
+                observed_fraction,
+                on_step=False,
+                on_epoch=True,
+                prog_bar=False,
+                logger=True,
+            )
+            figures = []
+            for idx, example in enumerate(probe_examples):
+                fig = self._build_qualitative_probe_figure(probe_name, example)
+                figures.append(fig)
+                self.logger.experiment.add_figure(
+                    f"qualitative_probe/{probe_name}/examples_{idx}",
+                    fig,
+                    global_step=self.current_epoch,
+                )
+            for fig in figures:
+                plt.close(fig)
+
+    def _build_qualitative_probe_figure(self, probe_name: str, example: dict[str, torch.Tensor]) -> plt.Figure:
+        src_rgb = self.denormalize_rgb(example["src_rgb"])
+        tgt_rgb = self.denormalize_rgb(example["tgt_rgb"])
+        src_dino_rgb = self.dino_to_rgb_pca(example["src_dino"])
+        tgt_dino_rgb = self.dino_to_rgb_pca(example["tgt_dino"])
+        observed_valid = example["observed_valid"]
+        input_rgb = self.mask_rgb_black(self.flow_to_rgb(example["flow_input"]), observed_valid)
+        gt_rgb = self.mask_rgb_black(self.flow_to_rgb(example["target_flow"]), example["valid"])
+        pred_rgb = self.flow_to_rgb(example["pred_flow"])
+        valid_rgb = observed_valid.unsqueeze(0).repeat(3, 1, 1)
+
+        fig, axes = plt.subplots(2, 4, figsize=(15, 8), dpi=130)
+        panels = [
+            ("Source RGB", src_rgb),
+            ("Target RGB", tgt_rgb),
+            ("Source DINO PCA", src_dino_rgb),
+            ("Target DINO PCA", tgt_dino_rgb),
+            ("Observed Flow", input_rgb),
+            ("Ground Truth", gt_rgb),
+            ("Prediction", pred_rgb),
+            ("Observed Mask", valid_rgb),
+        ]
+        for ax, (title, image) in zip(axes.flat, panels):
+            ax.imshow(np.transpose(image.numpy(), (1, 2, 0)))
+            ax.set_title(title, fontsize=8)
+            ax.set_xticks([])
+            ax.set_yticks([])
+        fig.suptitle(f"{probe_name} probe", fontsize=10)
         fig.tight_layout()
         return fig
 

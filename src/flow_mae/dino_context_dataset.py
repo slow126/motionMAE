@@ -15,6 +15,7 @@ from .dataset import (
     PointOdysseyProbeConfig,
     PointOdysseyProbeDataset,
 )
+from .qualitative_probes import QualitativeProbeConfig, build_qualitative_probe_dataset
 
 
 def _dataset_root_from_argument(root: str | Path) -> Path:
@@ -144,13 +145,16 @@ class FlyingThingsDINOFlowMAEDataModule(pl.LightningDataModule):
         self,
         config: FlyingThingsDINOFlowMAEConfig,
         pointodyssey_probe_config: Optional[PointOdysseyProbeConfig] = None,
+        qualitative_probe_configs: Optional[list[QualitativeProbeConfig]] = None,
     ) -> None:
         super().__init__()
         self.config = config
         self.pointodyssey_probe_config = pointodyssey_probe_config
+        self.qualitative_probe_configs = qualitative_probe_configs or []
         self.train_dataset: Optional[FlyingThingsDINOFlowMAEDataset] = None
         self.val_dataset: Optional[FlyingThingsDINOFlowMAEDataset] = None
         self.pointodyssey_probe_dataset: Optional[PointOdysseyProbeDataset] = None
+        self.qualitative_probe_datasets: dict[str, object] = {}
 
     def setup(self, stage: Optional[str] = None) -> None:
         if stage in (None, "fit"):
@@ -198,6 +202,16 @@ class FlyingThingsDINOFlowMAEDataModule(pl.LightningDataModule):
                     "[FlowMAEDINODataModule] "
                     f"pointodyssey_probe_samples={len(self.pointodyssey_probe_dataset)} "
                     f"manifest={self.pointodyssey_probe_config.manifest_path}"
+                )
+            self.qualitative_probe_datasets = {}
+            for probe_cfg in self.qualitative_probe_configs:
+                dataset = build_qualitative_probe_dataset(probe_cfg)
+                self.qualitative_probe_datasets[probe_cfg.name] = dataset
+                print(
+                    "[FlowMAEDINODataModule] "
+                    f"qualitative_probe={probe_cfg.name} "
+                    f"dataset_type={probe_cfg.dataset_type} "
+                    f"samples={len(dataset)}"
                 )
 
     def train_dataloader(self) -> DataLoader:
@@ -253,3 +267,25 @@ class FlyingThingsDINOFlowMAEDataModule(pl.LightningDataModule):
             drop_last=False,
             **kwargs,
         )
+
+    def get_qualitative_probe_dataloaders(self) -> dict[str, DataLoader]:
+        loaders: dict[str, DataLoader] = {}
+        for probe_cfg in self.qualitative_probe_configs:
+            dataset = self.qualitative_probe_datasets.get(probe_cfg.name)
+            if dataset is None:
+                continue
+            num_workers = int(probe_cfg.num_workers)
+            kwargs = {}
+            if num_workers > 0 and probe_cfg.prefetch_factor is not None:
+                kwargs["prefetch_factor"] = int(probe_cfg.prefetch_factor)
+            loaders[probe_cfg.name] = DataLoader(
+                dataset,
+                batch_size=int(probe_cfg.batch_size),
+                shuffle=False,
+                num_workers=num_workers,
+                pin_memory=bool(self.config.pin_memory),
+                persistent_workers=bool(num_workers > 0 and self.config.persistent_workers),
+                drop_last=False,
+                **kwargs,
+            )
+        return loaders

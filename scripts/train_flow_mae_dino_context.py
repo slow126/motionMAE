@@ -28,6 +28,7 @@ from src.flow_mae.dino_context_dataset import (
 from src.flow_mae.dino_context_lightning import FlowMAEDINOContextLightningModule
 from src.flow_mae.dino_context_model import FlowMAEDINOContextModelConfig
 from src.flow_mae.dataset import PointOdysseyProbeConfig, materialize_probe_manifest
+from src.flow_mae.qualitative_probes import QualitativeProbeConfig
 
 
 def load_config(path: str) -> dict[str, Any]:
@@ -66,6 +67,7 @@ def main() -> None:
     model_config = dict(config["model"])
     data_config = config["data"]
     pointodyssey_probe_config = config.get("pointodyssey_probe", None)
+    qualitative_probe_configs_raw = config.get("qualitative_probes", []) or []
 
     seed = int(training_config.get("seed", 2021))
     set_seed(seed)
@@ -117,9 +119,18 @@ def main() -> None:
             f"num_samples={probe_cfg.num_samples}"
         )
 
+    qualitative_probe_cfgs = [QualitativeProbeConfig(**probe) for probe in qualitative_probe_configs_raw]
+    if qualitative_probe_cfgs:
+        probe_names = ", ".join(cfg.name for cfg in qualitative_probe_cfgs)
+        print(
+            "[train_flow_mae_dino_context] "
+            f"qualitative_probes={probe_names}"
+        )
+
     datamodule = FlyingThingsDINOFlowMAEDataModule(
         FlyingThingsDINOFlowMAEConfig(**data_config),
         pointodyssey_probe_config=probe_cfg,
+        qualitative_probe_configs=qualitative_probe_cfgs,
     )
     datamodule.setup("fit")
     if datamodule.train_dataset is None:
@@ -154,6 +165,7 @@ def main() -> None:
         model_config=FlowMAEDINOContextModelConfig(**model_config),
         training_config=training_config,
         pointodyssey_probe_config=probe_cfg_dict,
+        qualitative_probe_configs=qualitative_probe_configs_raw,
     )
 
     logger = TensorBoardLogger(save_dir=str(run_dir), name="tensorboard", version="")
