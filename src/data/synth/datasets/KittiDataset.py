@@ -40,6 +40,7 @@ class KittiSimpleDataset(Dataset):
         version: str = 'auto',
         occ_type: str = 'occ',
         reverse_flow: bool = False,
+        split_ratio: float = 0.8,
     ):
         """
         Initialize KITTI dataset.

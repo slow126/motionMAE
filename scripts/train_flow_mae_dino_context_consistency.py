@@ -64,6 +64,17 @@ def make_run_dir(config: dict[str, Any], config_path: str) -> Path:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train two-branch DINO-context flow MAE consistency model on FlyingThings")
     parser.add_argument("--config", required=True, help="Path to YAML config")
+    parser.add_argument(
+        "--resume-ckpt",
+        default=None,
+        help="Optional checkpoint path used to warm-start model weights while starting a fresh optimizer/scheduler.",
+    )
+    parser.add_argument(
+        "--max-epochs",
+        type=int,
+        default=None,
+        help="Optional override for training.max_epochs after loading the YAML config.",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config)
@@ -75,6 +86,11 @@ def main() -> None:
 
     seed = int(training_config.get("seed", 2021))
     set_seed(seed)
+
+    if args.resume_ckpt:
+        training_config["resume_ckpt"] = args.resume_ckpt
+    if args.max_epochs is not None:
+        training_config["max_epochs"] = int(args.max_epochs)
 
     if torch.cuda.is_available():
         allow_tf32 = bool(training_config.get("allow_tf32", True))
