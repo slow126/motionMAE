@@ -63,3 +63,4 @@ models/**/*_umap_results/
 
 scripts/mae_latent*
 snapshots_mae/
+scripts/consistency_umap_out_*/

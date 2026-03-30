@@ -1,0 +1,166 @@
+experiment:
+  name: flyingthings_correspondence_repr_long
+  description: >-
+    Factored correspondence representation model: separate src/tgt RGB, DINO,
+    evidence branches with shared spatial pos embeds, 256 readout tokens for
+    z_corr, supervision density token with decorrelation, diverse masking
+    regimes (dense/patch/speckle/keypoint/full), reconstruction loss on all
+    valid pixels, VICReg consistency with EMA-smoothed statistics.
+
+model:
+  image_size: 256
+  patch_size: 16
+  context_feature_dim: 768
+  encoder_dim: 768
+  encoder_depth: 8
+  encoder_heads: 12
+  mlp_ratio: 4.0
+  decoder_dim: 512
+  decoder_depth: 4
+  decoder_heads: 8
+  dropout: 0.0
+  attention_dropout: 0.0
+
+  # Readout / projector
+  num_readout_tokens: 256
+  projector_hidden_dim: 768
+  projector_output_dim: 256
+  normalize_projector_output: true
+
+  # Side-factor projectors
+  rgb_projector_dim: 128
+  sem_projector_dim: 128
+
+  # RGB reconstruction grounding
+  rgb_recon_enabled: true
+
+  # Supervision density token
+  sup_token_enabled: true
+
+  # Flow reconstruction
+  flow_channels: 2
+  loss: smooth_l1
+  smooth_l1_beta: 1.0
+
+  # Evidence sampler — anchor (denser view)
+  anchor_dense_prob: 0.50
+  anchor_light_mask_prob: 0.25
+  anchor_speckle_prob: 0.15
+  anchor_keypoint_prob: 0.10
+  anchor_light_mask_ratio_min: 0.0
+  anchor_light_mask_ratio_max: 0.10
+  anchor_speckle_keep_ratio: 0.80
+  anchor_keypoint_count_min: 200
+  anchor_keypoint_count_max: 500
+
+  # Evidence sampler — student (sparser view)
+  student_moderate_mask_prob: 0.15
+  student_heavy_mask_prob: 0.25
+  student_speckle_prob: 0.20
+  student_patch_speckle_prob: 0.15
+  student_keypoint_prob: 0.10
+  student_full_mask_prob: 0.15
+  student_moderate_mask_ratio_min: 0.30
+  student_moderate_mask_ratio_max: 0.60
+  student_heavy_mask_ratio_min: 0.70
+  student_heavy_mask_ratio_max: 0.95
+  student_speckle_keep_ratio: 0.10
+  student_patch_speckle_mask_ratio_min: 0.30
+  student_patch_speckle_mask_ratio_max: 0.60
+  student_patch_speckle_keep_ratio: 0.20
+  student_keypoint_count_min: 30
+  student_keypoint_count_max: 200
+
+training:
+  seed: 2021
+  max_epochs: 200
+  lr: 7.5e-5
+  min_lr: 1.0e-6
+  warmup_epochs: 10
+  weight_decay: 0.05
+  gradient_clip_val: 1.0
+  log_every_n_steps: 25
+  tb_log_images: 4
+  qualitative_probe_log_images: 4
+  num_sanity_val_steps: 2
+  precision: 16-mixed
+  devices: 1
+  allow_tf32: true
+  cudnn_benchmark: true
+  float32_matmul_precision: high
+
+  # Loss weights
+  lambda_align: 0.05
+  lambda_rgb_recon: 0.01
+  lambda_sup: 0.01
+  lambda_var: 0.01
+  lambda_decorr: 0.01
+
+  # EMA settings for VICReg losses
+  ema_decay: 0.99
+  variance_eps: 1.0e-4
+  variance_target_std: 1.0
+
+  # Checkpointing
+  save_checkpoints: true
+  checkpoint_monitor: val_loss
+  checkpoint_mode: min
+  checkpoint_save_top_k: 2
+  checkpoint_save_last: true
+  checkpoint_every_n_epochs: 1
+  resume_ckpt: null
+
+data:
+  root: /home/slow1/Data/FlyingThings3D_Pytorch
+  dino_features_root: /home/slow1/Data/precomputed/flyingthings_dinov3_vitb16_256x256
+  dino_feature_subdir: features
+  train_split: train
+  val_split: test
+  pass_name: clean
+  camera: left
+  image_size: [256, 256]
+  reverse_flow: false
+  normalize_rgb: true
+  batch_size: 8
+  val_batch_size: 8
+  num_workers: 16
+  prefetch_factor: 4
+  pin_memory: true
+  persistent_workers: true
+  drop_last: true
+  normalize_flow: true
+  flow_scale: null
+  max_flow_magnitude: null
+  max_flow_magnitude_multiplier: 2.0
+
+qualitative_probes:
+  - name: kitti2015
+    dataset_type: kitti
+    num_samples: 8
+    batch_size: 4
+    num_workers: 0
+    image_size: [256, 256]
+    reverse_flow: false
+    normalize_rgb: true
+    normalize_flow: true
+    dino_features_root: /home/slow1/Data/precomputed/probes/kitti2015_dinov3_vitb16_256x256
+    dino_model_dir: /home/slow1/shared_models/dinov3-vitb16-pretrain-lvd1689m
+    kitti_root: /home/slow1/Data/correspondence/kitti/kitti-2015
+    kitti_split: training
+    kitti_version: 2015
+    kitti_occ_type: occ
+  - name: tss
+    dataset_type: tss
+    num_samples: 8
+    batch_size: 4
+    num_workers: 0
+    image_size: [256, 256]
+    reverse_flow: false
+    normalize_rgb: true
+    normalize_flow: true
+    dino_features_root: /home/slow1/Data/precomputed/probes/tss_dinov3_vitb16_256x256
+    dino_model_dir: /home/slow1/shared_models/dinov3-vitb16-pretrain-lvd1689m
+    tss_root: /home/slow1/Data/correspondence/TSS_CVPR2016
+
+paths:
+  snapshots: ./snapshots
