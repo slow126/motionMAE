@@ -12,11 +12,11 @@ model:
   patch_size: 16
   context_feature_dim: 768
   encoder_dim: 768
-  encoder_depth: 8
+  encoder_depth: 12
   encoder_heads: 12
   mlp_ratio: 4.0
   decoder_dim: 512
-  decoder_depth: 4
+  decoder_depth: 6
   decoder_heads: 8
   dropout: 0.0
   attention_dropout: 0.0
@@ -121,8 +121,8 @@ data:
   image_size: [256, 256]
   reverse_flow: false
   normalize_rgb: true
-  batch_size: 8
-  val_batch_size: 8
+  batch_size: 32
+  val_batch_size: 32
   num_workers: 16
   prefetch_factor: 4
   pin_memory: true
