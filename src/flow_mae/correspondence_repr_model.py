@@ -228,16 +228,16 @@ class EvidenceSampler:
         # Top-k by noise value = random selection of valid pixels
         n_valid = flat_valid.sum(dim=1).long()  # [B]
         k = min(int(count), int(flat_valid.shape[1]))
+        if k <= 0:
+            return torch.zeros_like(valid)
 
-        # Sort descending, take top count
-        _, indices = noise.sort(dim=1, descending=True)
-        positions = torch.arange(flat_valid.shape[1],
-                                 device=device).unsqueeze(0)
         # Only keep positions < min(count, n_valid_per_sample)
         keep_limit = n_valid.clamp_max(k).unsqueeze(1)
+        positions = torch.arange(k, device=device).unsqueeze(0)
         keep_mask = (positions < keep_limit).float()
 
         flat_observed = torch.zeros_like(flat_valid)
+        _, indices = noise.topk(k=k, dim=1, largest=True, sorted=True)
         flat_observed.scatter_(1, indices, keep_mask)
         # Zero out invalid pixels (safety)
         flat_observed = flat_observed * flat_valid
@@ -265,20 +265,34 @@ class EvidenceSampler:
         probs = [c.anchor_dense_prob, c.anchor_light_mask_prob,
                  c.anchor_speckle_prob, c.anchor_keypoint_prob]
         regimes = self._sample_regimes_batched(probs, bsz, device)
+        observed = torch.zeros_like(valid)
 
-        # Compute all regimes for full batch, then select per-sample
-        dense_obs = self._dense(valid)
-        patch_obs = self._patch_mask(valid, c.anchor_light_mask_ratio_min,
-                                     c.anchor_light_mask_ratio_max)
-        speckle_obs = self._speckle(valid, c.anchor_speckle_keep_ratio)
-        keypoint_obs = self._keypoint(valid, c.anchor_keypoint_count_min,
-                                      c.anchor_keypoint_count_max)
+        dense_mask = regimes == 0
+        if dense_mask.any():
+            observed[dense_mask] = self._dense(valid[dense_mask])
 
-        # Stack and gather by regime index
-        all_obs = torch.stack([dense_obs, patch_obs, speckle_obs,
-                               keypoint_obs], dim=0)  # [4, B, H, W]
-        observed = all_obs[regimes, torch.arange(bsz, device=device)]
+        patch_mask = regimes == 1
+        if patch_mask.any():
+            observed[patch_mask] = self._patch_mask(
+                valid[patch_mask],
+                c.anchor_light_mask_ratio_min,
+                c.anchor_light_mask_ratio_max,
+            )
 
+        speckle_mask = regimes == 2
+        if speckle_mask.any():
+            observed[speckle_mask] = self._speckle(
+                valid[speckle_mask],
+                c.anchor_speckle_keep_ratio,
+            )
+
+        keypoint_mask = regimes == 3
+        if keypoint_mask.any():
+            observed[keypoint_mask] = self._keypoint(
+                valid[keypoint_mask],
+                c.anchor_keypoint_count_min,
+                c.anchor_keypoint_count_max,
+            )
         return self._build_result(valid, observed)
 
     def sample_student(self, valid: torch.Tensor) -> dict[str, torch.Tensor]:
@@ -289,27 +303,51 @@ class EvidenceSampler:
                  c.student_speckle_prob, c.student_patch_speckle_prob,
                  c.student_keypoint_prob, c.student_full_mask_prob]
         regimes = self._sample_regimes_batched(probs, bsz, device)
+        observed = torch.zeros_like(valid)
 
-        moderate_obs = self._patch_mask(valid,
-                                        c.student_moderate_mask_ratio_min,
-                                        c.student_moderate_mask_ratio_max)
-        heavy_obs = self._patch_mask(valid,
-                                     c.student_heavy_mask_ratio_min,
-                                     c.student_heavy_mask_ratio_max)
-        speckle_obs = self._speckle(valid, c.student_speckle_keep_ratio)
-        ps_obs = self._patch_speckle(valid,
-                                     c.student_patch_speckle_mask_ratio_min,
-                                     c.student_patch_speckle_mask_ratio_max,
-                                     c.student_patch_speckle_keep_ratio)
-        keypoint_obs = self._keypoint(valid, c.student_keypoint_count_min,
-                                      c.student_keypoint_count_max)
-        full_obs = self._full_mask(valid)
+        moderate_mask = regimes == 0
+        if moderate_mask.any():
+            observed[moderate_mask] = self._patch_mask(
+                valid[moderate_mask],
+                c.student_moderate_mask_ratio_min,
+                c.student_moderate_mask_ratio_max,
+            )
 
-        all_obs = torch.stack([moderate_obs, heavy_obs, speckle_obs,
-                               ps_obs, keypoint_obs, full_obs],
-                              dim=0)  # [6, B, H, W]
-        observed = all_obs[regimes, torch.arange(bsz, device=device)]
+        heavy_mask = regimes == 1
+        if heavy_mask.any():
+            observed[heavy_mask] = self._patch_mask(
+                valid[heavy_mask],
+                c.student_heavy_mask_ratio_min,
+                c.student_heavy_mask_ratio_max,
+            )
 
+        speckle_mask = regimes == 2
+        if speckle_mask.any():
+            observed[speckle_mask] = self._speckle(
+                valid[speckle_mask],
+                c.student_speckle_keep_ratio,
+            )
+
+        patch_speckle_mask = regimes == 3
+        if patch_speckle_mask.any():
+            observed[patch_speckle_mask] = self._patch_speckle(
+                valid[patch_speckle_mask],
+                c.student_patch_speckle_mask_ratio_min,
+                c.student_patch_speckle_mask_ratio_max,
+                c.student_patch_speckle_keep_ratio,
+            )
+
+        keypoint_mask = regimes == 4
+        if keypoint_mask.any():
+            observed[keypoint_mask] = self._keypoint(
+                valid[keypoint_mask],
+                c.student_keypoint_count_min,
+                c.student_keypoint_count_max,
+            )
+
+        full_mask = regimes == 5
+        if full_mask.any():
+            observed[full_mask] = self._full_mask(valid[full_mask])
         return self._build_result(valid, observed)
 
     def _build_result(self, valid: torch.Tensor,

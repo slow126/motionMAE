@@ -384,9 +384,28 @@ class CorrespondenceReprLightningModule(pl.LightningModule):
     # -------------------------------------------------------------------
 
     def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, Any]:
-        """Default forward for validation — student-style masking."""
+        """Default forward for validation/probes.
+
+        Probe datasets can provide an explicit observation mask via
+        observed_valid_override; otherwise we sample a student-style mask.
+        """
         valid = batch["valid"]
-        view = self.model.evidence_sampler.sample_student(valid)
+        observed_valid_override = batch.get("observed_valid_override")
+        if observed_valid_override is not None:
+            observed_valid = observed_valid_override.to(
+                device=valid.device, dtype=valid.dtype) * valid
+            valid_pixels = valid.sum(dim=(1, 2))
+            visible_ratio = torch.where(
+                valid_pixels > 0,
+                observed_valid.sum(dim=(1, 2)) / valid_pixels.clamp_min(1.0),
+                torch.zeros_like(valid_pixels),
+            )
+            view = {
+                "observed_valid": observed_valid,
+                "visible_ratio": visible_ratio,
+            }
+        else:
+            view = self.model.evidence_sampler.sample_student(valid)
         obs_flow = batch["flow"] * view["observed_valid"].unsqueeze(1)
         out = self.model.forward_branch(
             src_rgb=batch["src_rgb"],
