@@ -112,8 +112,8 @@ class ProjectorMLP(nn.Module):
 class EvidenceSampler:
     """Samples observation masks from dense GT valid masks.
 
-    Produces an ``observed_valid`` pixel mask and a scalar ``visible_ratio``
-    for a given branch configuration.
+    All operations are vectorized over the batch dimension — no per-sample
+    Python for-loops.
     """
 
     def __init__(self, cfg: CorrespondenceReprModelConfig, patch_size: int,
@@ -123,7 +123,7 @@ class EvidenceSampler:
         self.grid_size = grid_size
         self.num_patches = grid_size * grid_size
 
-    # -- low-level helpers ---------------------------------------------------
+    # -- low-level helpers (fully batched) -----------------------------------
 
     @staticmethod
     def _patchify_mask(valid: torch.Tensor, patch_size: int,
@@ -141,155 +141,174 @@ class EvidenceSampler:
             scale_factor=patch_size, mode="nearest",
         )[:, 0]
 
-    @staticmethod
-    def _uniform(lo: float, hi: float) -> float:
-        lo, hi = max(0.0, min(1.0, lo)), max(0.0, min(1.0, hi))
-        if hi < lo:
-            lo, hi = hi, lo
-        if lo == hi:
-            return lo
-        return float(torch.empty(1).uniform_(lo, hi).item())
-
-    # -- regime implementations ----------------------------------------------
+    # -- regime implementations (batched) ------------------------------------
 
     def _dense(self, valid: torch.Tensor) -> torch.Tensor:
-        """Full observation — keep everything valid."""
         return valid.clone()
 
     def _patch_mask(self, valid: torch.Tensor, ratio_min: float,
                     ratio_max: float) -> torch.Tensor:
-        """Mask random patches, keep rest fully visible."""
-        ratio = self._uniform(ratio_min, ratio_max)
-        patch_valid = self._patchify_mask(valid, self.patch_size,
-                                          self.num_patches)
+        """Mask random patches — fully batched via random noise sorting."""
+        ratio_min = max(0.0, min(1.0, ratio_min))
+        ratio_max = max(0.0, min(1.0, ratio_max))
+        if ratio_max < ratio_min:
+            ratio_min, ratio_max = ratio_max, ratio_min
+        # Per-sample random ratio
         bsz = valid.shape[0]
         device = valid.device
+        ratios = torch.empty(bsz, device=device).uniform_(ratio_min, ratio_max)
+
+        patch_valid = self._patchify_mask(valid, self.patch_size,
+                                          self.num_patches)
+        # Random noise, but invalid patches get -inf so they sort last
+        noise = torch.rand_like(patch_valid)
+        noise = noise * patch_valid + (-1.0) * (1.0 - patch_valid)
+        # Sort descending — highest noise values first (these get masked)
+        _, indices = noise.sort(dim=1, descending=True)
+
+        # Number of valid patches per sample
+        n_valid = patch_valid.sum(dim=1)  # [B]
+        # Number to mask (at most n_valid - 1 to keep at least one)
+        n_mask = (ratios * n_valid).ceil().long()
+        n_mask = torch.clamp(n_mask, max=(n_valid - 1).long().clamp_min(0))
+
+        # Build mask: position in sorted order < n_mask means masked
+        positions = torch.arange(self.num_patches, device=device).unsqueeze(0)
+        sorted_mask = (positions < n_mask.unsqueeze(1)).float()
+
+        # Scatter back to original patch positions
         patch_masked = torch.zeros_like(patch_valid)
-        for b in range(bsz):
-            idx = torch.nonzero(patch_valid[b] > 0, as_tuple=False).flatten()
-            if idx.numel() == 0:
-                continue
-            k = max(0, min(int(math.ceil(idx.numel() * ratio)),
-                           idx.numel() - 1))
-            if k <= 0:
-                continue
-            sel = idx[torch.randperm(idx.numel(), device=device)[:k]]
-            patch_masked[b, sel] = 1.0
+        patch_masked.scatter_(1, indices, sorted_mask)
+
         pixel_masked = self._expand_patch_mask(patch_masked, self.grid_size,
                                                self.patch_size)
         return valid * (1.0 - pixel_masked)
 
     def _speckle(self, valid: torch.Tensor,
                  keep_ratio: float) -> torch.Tensor:
-        """IID per-pixel subsampling of valid pixels."""
+        """IID per-pixel subsampling — fully batched."""
         keep_ratio = max(0.0, min(1.0, keep_ratio))
         if keep_ratio >= 1.0:
             return valid.clone()
         observed = ((torch.rand_like(valid) < keep_ratio) &
                     (valid > 0)).float()
-        # ensure at least one pixel per sample
-        for b in range(valid.shape[0]):
-            if valid[b].sum() > 0 and observed[b].sum() == 0:
-                coords = torch.nonzero(valid[b] > 0, as_tuple=False)
-                pick = coords[torch.randint(coords.shape[0], (1,)).item()]
-                observed[b, pick[0], pick[1]] = 1.0
+        # Ensure at least one pixel per sample (batched)
+        empty = (observed.sum(dim=(1, 2)) == 0) & (valid.sum(dim=(1, 2)) > 0)
+        if empty.any():
+            # For empty samples, pick a random valid pixel
+            flat_valid = valid[empty].view(empty.sum(), -1)
+            # Replace zeros with large values so argmin of (rand * invalid)
+            # doesn't pick them
+            noise = torch.rand_like(flat_valid)
+            noise = noise + (1.0 - flat_valid) * 2.0  # invalid → large
+            min_idx = noise.argmin(dim=1)
+            flat_obs = observed[empty].view(empty.sum(), -1)
+            flat_obs.scatter_(1, min_idx.unsqueeze(1), 1.0)
+            observed[empty] = flat_obs.view_as(valid[empty])
         return observed
 
     def _patch_speckle(self, valid: torch.Tensor, mask_ratio_min: float,
                        mask_ratio_max: float,
                        speckle_keep: float) -> torch.Tensor:
-        """Patch masking then speckle within visible patches."""
         after_patch = self._patch_mask(valid, mask_ratio_min, mask_ratio_max)
         return self._speckle(after_patch, speckle_keep)
 
     def _keypoint(self, valid: torch.Tensor, count_min: int,
                   count_max: int) -> torch.Tensor:
-        """Sample a fixed number of scattered valid pixels."""
-        count = torch.randint(count_min, count_max + 1, (1,)).item()
+        """Sample scattered valid pixels — batched via noise ranking."""
         bsz = valid.shape[0]
-        observed = torch.zeros_like(valid)
-        for b in range(bsz):
-            coords = torch.nonzero(valid[b] > 0, as_tuple=False)
-            if coords.shape[0] == 0:
-                continue
-            k = min(int(count), coords.shape[0])
-            sel = coords[torch.randperm(coords.shape[0])[:k]]
-            observed[b, sel[:, 0], sel[:, 1]] = 1.0
-        return observed
+        device = valid.device
+        count = torch.randint(count_min, count_max + 1, (1,),
+                              device=device).item()
+
+        flat_valid = valid.view(bsz, -1)  # [B, H*W]
+        # Random noise; invalid pixels get -1 so they rank last
+        noise = torch.rand_like(flat_valid)
+        noise = noise * flat_valid + (-1.0) * (1.0 - flat_valid)
+        # Top-k by noise value = random selection of valid pixels
+        n_valid = flat_valid.sum(dim=1).long()  # [B]
+        k = min(int(count), int(flat_valid.shape[1]))
+
+        # Sort descending, take top count
+        _, indices = noise.sort(dim=1, descending=True)
+        positions = torch.arange(flat_valid.shape[1],
+                                 device=device).unsqueeze(0)
+        # Only keep positions < min(count, n_valid_per_sample)
+        keep_limit = n_valid.clamp_max(k).unsqueeze(1)
+        keep_mask = (positions < keep_limit).float()
+
+        flat_observed = torch.zeros_like(flat_valid)
+        flat_observed.scatter_(1, indices, keep_mask)
+        # Zero out invalid pixels (safety)
+        flat_observed = flat_observed * flat_valid
+        return flat_observed.view_as(valid)
 
     def _full_mask(self, valid: torch.Tensor) -> torch.Tensor:
-        """Zero evidence."""
         return torch.zeros_like(valid)
 
-    # -- branch-level samplers -----------------------------------------------
+    # -- branch-level samplers (batched regime assignment) -------------------
 
-    def _sample_regime(self, probs: list[float]) -> int:
-        """Categorical sample from un-normalized probabilities."""
-        total = sum(probs)
-        if total <= 0:
-            return 0
-        r = torch.rand(1).item() * total
-        cumulative = 0.0
-        for i, p in enumerate(probs):
-            cumulative += p
-            if r < cumulative:
-                return i
-        return len(probs) - 1
+    @staticmethod
+    def _sample_regimes_batched(probs: list[float],
+                                bsz: int,
+                                device: torch.device) -> torch.Tensor:
+        """Sample regime index per sample — returns [B] long tensor."""
+        weights = torch.tensor(probs, device=device, dtype=torch.float32)
+        weights = weights / weights.sum().clamp_min(1e-8)
+        return torch.multinomial(weights.unsqueeze(0).expand(bsz, -1),
+                                 num_samples=1).squeeze(1)
 
     def sample_anchor(self, valid: torch.Tensor) -> dict[str, torch.Tensor]:
         c = self.cfg
+        bsz = valid.shape[0]
+        device = valid.device
         probs = [c.anchor_dense_prob, c.anchor_light_mask_prob,
                  c.anchor_speckle_prob, c.anchor_keypoint_prob]
+        regimes = self._sample_regimes_batched(probs, bsz, device)
 
-        bsz = valid.shape[0]
-        observed = torch.zeros_like(valid)
-        for b in range(bsz):
-            v = valid[b:b+1]
-            regime = self._sample_regime(probs)
-            if regime == 0:
-                obs = self._dense(v)
-            elif regime == 1:
-                obs = self._patch_mask(v, c.anchor_light_mask_ratio_min,
-                                       c.anchor_light_mask_ratio_max)
-            elif regime == 2:
-                obs = self._speckle(v, c.anchor_speckle_keep_ratio)
-            else:
-                obs = self._keypoint(v, c.anchor_keypoint_count_min,
-                                     c.anchor_keypoint_count_max)
-            observed[b] = obs[0]
+        # Compute all regimes for full batch, then select per-sample
+        dense_obs = self._dense(valid)
+        patch_obs = self._patch_mask(valid, c.anchor_light_mask_ratio_min,
+                                     c.anchor_light_mask_ratio_max)
+        speckle_obs = self._speckle(valid, c.anchor_speckle_keep_ratio)
+        keypoint_obs = self._keypoint(valid, c.anchor_keypoint_count_min,
+                                      c.anchor_keypoint_count_max)
+
+        # Stack and gather by regime index
+        all_obs = torch.stack([dense_obs, patch_obs, speckle_obs,
+                               keypoint_obs], dim=0)  # [4, B, H, W]
+        observed = all_obs[regimes, torch.arange(bsz, device=device)]
 
         return self._build_result(valid, observed)
 
     def sample_student(self, valid: torch.Tensor) -> dict[str, torch.Tensor]:
         c = self.cfg
+        bsz = valid.shape[0]
+        device = valid.device
         probs = [c.student_moderate_mask_prob, c.student_heavy_mask_prob,
                  c.student_speckle_prob, c.student_patch_speckle_prob,
                  c.student_keypoint_prob, c.student_full_mask_prob]
+        regimes = self._sample_regimes_batched(probs, bsz, device)
 
-        bsz = valid.shape[0]
-        observed = torch.zeros_like(valid)
-        for b in range(bsz):
-            v = valid[b:b+1]
-            regime = self._sample_regime(probs)
-            if regime == 0:
-                obs = self._patch_mask(v, c.student_moderate_mask_ratio_min,
-                                       c.student_moderate_mask_ratio_max)
-            elif regime == 1:
-                obs = self._patch_mask(v, c.student_heavy_mask_ratio_min,
-                                       c.student_heavy_mask_ratio_max)
-            elif regime == 2:
-                obs = self._speckle(v, c.student_speckle_keep_ratio)
-            elif regime == 3:
-                obs = self._patch_speckle(
-                    v, c.student_patch_speckle_mask_ratio_min,
-                    c.student_patch_speckle_mask_ratio_max,
-                    c.student_patch_speckle_keep_ratio)
-            elif regime == 4:
-                obs = self._keypoint(v, c.student_keypoint_count_min,
-                                     c.student_keypoint_count_max)
-            else:
-                obs = self._full_mask(v)
-            observed[b] = obs[0]
+        moderate_obs = self._patch_mask(valid,
+                                        c.student_moderate_mask_ratio_min,
+                                        c.student_moderate_mask_ratio_max)
+        heavy_obs = self._patch_mask(valid,
+                                     c.student_heavy_mask_ratio_min,
+                                     c.student_heavy_mask_ratio_max)
+        speckle_obs = self._speckle(valid, c.student_speckle_keep_ratio)
+        ps_obs = self._patch_speckle(valid,
+                                     c.student_patch_speckle_mask_ratio_min,
+                                     c.student_patch_speckle_mask_ratio_max,
+                                     c.student_patch_speckle_keep_ratio)
+        keypoint_obs = self._keypoint(valid, c.student_keypoint_count_min,
+                                      c.student_keypoint_count_max)
+        full_obs = self._full_mask(valid)
+
+        all_obs = torch.stack([moderate_obs, heavy_obs, speckle_obs,
+                               ps_obs, keypoint_obs, full_obs],
+                              dim=0)  # [6, B, H, W]
+        observed = all_obs[regimes, torch.arange(bsz, device=device)]
 
         return self._build_result(valid, observed)
 
