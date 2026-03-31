@@ -36,6 +36,7 @@ snapshots/
 analysis/
 archive/
 debug/
+tmp/
 
 # TensorBoard
 **/tb/
