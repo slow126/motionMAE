@@ -422,6 +422,24 @@ class CorrespondenceReprLightningModule(pl.LightningModule):
         self.log("train/missing_gain_frac",
                  completion["missing_gain_frac"],
                  on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/evidence_patch_visible_mean",
+                 student_out["evidence_patch_visible_mean"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/evidence_patch_empty_frac",
+                 student_out["evidence_patch_empty_frac"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/evidence_flow_token_norm",
+                 student_out["evidence_flow_token_norm"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/evidence_mask_token_norm",
+                 student_out["evidence_mask_token_norm"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/evidence_density_token_norm",
+                 student_out["evidence_density_token_norm"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/evidence_fused_token_norm",
+                 student_out["evidence_fused_token_norm"],
+                 on_step=False, on_epoch=True, batch_size=B)
         self.log("train/projected_latent_norm",
                  z.norm(dim=-1).mean(),
                  on_step=False, on_epoch=True, batch_size=B)
@@ -531,6 +549,24 @@ class CorrespondenceReprLightningModule(pl.LightningModule):
         self.log("val/missing_gain_over_copy", completion["missing_gain"],
                  on_step=False, on_epoch=True, batch_size=B)
         self.log("val/missing_gain_frac", completion["missing_gain_frac"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("val/evidence_patch_visible_mean",
+                 outputs["evidence_patch_visible_mean"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("val/evidence_patch_empty_frac",
+                 outputs["evidence_patch_empty_frac"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("val/evidence_flow_token_norm",
+                 outputs["evidence_flow_token_norm"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("val/evidence_mask_token_norm",
+                 outputs["evidence_mask_token_norm"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("val/evidence_density_token_norm",
+                 outputs["evidence_density_token_norm"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("val/evidence_fused_token_norm",
+                 outputs["evidence_fused_token_norm"],
                  on_step=False, on_epoch=True, batch_size=B)
 
         if self.example_batch is None:

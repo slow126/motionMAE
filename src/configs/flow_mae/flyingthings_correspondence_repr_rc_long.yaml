@@ -42,6 +42,12 @@ model:
   loss: smooth_l1
   smooth_l1_beta: 1.0
 
+  # Evidence embedding
+  evidence_flow_dim: 512
+  evidence_mask_dim: 192
+  evidence_density_dim: 64
+  evidence_norm_eps: 0.05
+
   # Evidence sampler — anchor (denser view)
   anchor_dense_prob: 0.50
   anchor_light_mask_prob: 0.25

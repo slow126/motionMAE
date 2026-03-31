@@ -1,0 +1,36 @@
+{
+  "source_bbox_xyxy": [
+    38,
+    131,
+    475,
+    379
+  ],
+  "target_bbox_xyxy": [
+    36,
+    149,
+    476,
+    345
+  ],
+  "flow_src_bbox_xyxy": [
+    36,
+    129,
+    478,
+    385
+  ],
+  "flow_trg_bbox_xyxy": [
+    36,
+    129,
+    477,
+    385
+  ],
+  "decode_zero_r": 0.54,
+  "decode_zero_g": 0.58,
+  "decode_scale_x": 40,
+  "decode_scale_y": 30,
+  "cycle_error_px": 7.794685363769531,
+  "mae_rgb_0_255": 87.69224548339844,
+  "rmse_rgb_0_255": 108.39788541526076,
+  "psnr_db": 7.430387404012027,
+  "valid_fraction": 0.3408050537109375,
+  "valid_pixel_count": 89340
+}

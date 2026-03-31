@@ -1,0 +1,28 @@
+{
+  "src_image": "sample_00001/src_img.png",
+  "trg_image": "sample_00001/trg_img.png",
+  "flow": "sample_00001/googleflow00001.jpg",
+  "flow_encoding": "rg_centered",
+  "flow_direction": "src_to_trg",
+  "source_shape_hwc": [
+    256,
+    256,
+    3
+  ],
+  "target_shape_hwc": [
+    256,
+    256,
+    3
+  ],
+  "flow_shape_hw2": [
+    256,
+    256,
+    2
+  ],
+  "mae_rgb_0_255": 74.76374816894531,
+  "mse_rgb_0_255": 8241.3291015625,
+  "rmse_rgb_0_255": 90.7817663496503,
+  "psnr_db": 8.970831036699522,
+  "valid_pixel_count": 25920,
+  "valid_fraction": 0.3955078125
+}

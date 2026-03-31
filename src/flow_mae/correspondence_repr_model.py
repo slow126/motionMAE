@@ -58,6 +58,12 @@ class CorrespondenceReprModelConfig:
     loss: str = "smooth_l1"
     smooth_l1_beta: float = 1.0
 
+    # Evidence embedding
+    evidence_flow_dim: int = 512
+    evidence_mask_dim: int = 192
+    evidence_density_dim: int = 64
+    evidence_norm_eps: float = 0.05
+
     # Evidence sampler — anchor
     anchor_dense_prob: float = 0.50
     anchor_light_mask_prob: float = 0.25
@@ -396,10 +402,27 @@ class CorrespondenceReprModel(nn.Module):
         self.context_norm = nn.LayerNorm(int(config.context_feature_dim))
         self.context_proj = nn.Linear(int(config.context_feature_dim), D)
 
-        # Evidence: observed_flow (2ch) + observed_valid (1ch)
-        self.evidence_embed = PatchEmbed(
-            in_channels=int(config.flow_channels) + 1,
-            patch_size=patch_size, embed_dim=D)
+        # Evidence: split flow, mask, and density before fusion.
+        evidence_flow_dim = int(config.evidence_flow_dim)
+        evidence_mask_dim = int(config.evidence_mask_dim)
+        evidence_density_dim = int(config.evidence_density_dim)
+        self.evidence_flow_embed = PatchEmbed(
+            in_channels=int(config.flow_channels),
+            patch_size=patch_size,
+            embed_dim=evidence_flow_dim,
+        )
+        self.evidence_mask_embed = PatchEmbed(
+            in_channels=1,
+            patch_size=patch_size,
+            embed_dim=evidence_mask_dim,
+        )
+        self.evidence_density_proj = nn.Linear(1, evidence_density_dim)
+        evidence_fused_dim = (evidence_flow_dim + evidence_mask_dim
+                              + evidence_density_dim)
+        self.evidence_fuse_norm = nn.LayerNorm(evidence_fused_dim)
+        self.evidence_fuse = nn.Linear(evidence_fused_dim, D)
+        self.empty_flow_token = nn.Parameter(
+            torch.zeros(1, 1, evidence_flow_dim))
 
         # -- Positional & type embeddings ------------------------------------
 
@@ -506,6 +529,7 @@ class CorrespondenceReprModel(nn.Module):
         nn.init.trunc_normal_(self.dino_type_embed, std=0.02)
         nn.init.trunc_normal_(self.evidence_type_embed, std=0.02)
         nn.init.trunc_normal_(self.readout_type_embed, std=0.02)
+        nn.init.trunc_normal_(self.empty_flow_token, std=0.02)
         nn.init.trunc_normal_(self.decoder_spatial_pos_embed, std=0.02)
         nn.init.trunc_normal_(self.decoder_src_type_embed, std=0.02)
         nn.init.trunc_normal_(self.decoder_tgt_type_embed, std=0.02)
@@ -589,13 +613,77 @@ class CorrespondenceReprModel(nn.Module):
                    + self.tgt_type_embed + self.dino_type_embed)
         return src_tok, tgt_tok
 
+    def evidence_patch_valid_fraction(
+        self, observed_valid: torch.Tensor
+    ) -> torch.Tensor:
+        patch_valid = F.avg_pool2d(
+            observed_valid.unsqueeze(1),
+            kernel_size=self.patch_size,
+            stride=self.patch_size,
+        )
+        return patch_valid[:, 0].reshape(observed_valid.shape[0],
+                                         self.num_patches, 1)
+
+    def embed_evidence_flow(
+        self,
+        observed_flow: torch.Tensor,
+        observed_valid: torch.Tensor,
+        patch_valid_fraction: torch.Tensor,
+    ) -> torch.Tensor:
+        masked_flow = observed_flow * observed_valid.unsqueeze(1)
+        flow_tok = self.evidence_flow_embed(masked_flow)
+        flow_tok = flow_tok / patch_valid_fraction.clamp_min(
+            float(self.config.evidence_norm_eps))
+        empty_mask = patch_valid_fraction <= 0
+        if empty_mask.any():
+            flow_tok = torch.where(
+                empty_mask,
+                self.empty_flow_token.expand(flow_tok.shape[0],
+                                             self.num_patches, -1),
+                flow_tok,
+            )
+        return flow_tok
+
+    def embed_evidence_mask(self, observed_valid: torch.Tensor) -> torch.Tensor:
+        return self.evidence_mask_embed(observed_valid.unsqueeze(1))
+
+    def embed_evidence_density(
+        self, patch_valid_fraction: torch.Tensor
+    ) -> torch.Tensor:
+        return self.evidence_density_proj(patch_valid_fraction)
+
+    def fuse_evidence(
+        self,
+        flow_tok: torch.Tensor,
+        mask_tok: torch.Tensor,
+        density_tok: torch.Tensor,
+    ) -> torch.Tensor:
+        fused = torch.cat([flow_tok, mask_tok, density_tok], dim=-1)
+        fused = self.evidence_fuse_norm(fused)
+        fused = self.evidence_fuse(fused)
+        return (fused + self.spatial_pos_embed + self.evidence_type_embed)
+
     def embed_evidence(self, observed_flow: torch.Tensor,
-                       observed_valid: torch.Tensor) -> torch.Tensor:
-        """Embed observed flow + valid mask."""
-        x = torch.cat([observed_flow,
-                        observed_valid.unsqueeze(1)], dim=1)
-        return (self.evidence_embed(x)
-                + self.spatial_pos_embed + self.evidence_type_embed)
+                       observed_valid: torch.Tensor
+                       ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Embed sparse flow evidence with explicit mask/density structure."""
+        patch_valid_fraction = self.evidence_patch_valid_fraction(
+            observed_valid)
+        flow_tok = self.embed_evidence_flow(
+            observed_flow, observed_valid, patch_valid_fraction)
+        mask_tok = self.embed_evidence_mask(observed_valid)
+        density_tok = self.embed_evidence_density(patch_valid_fraction)
+        evidence_tok = self.fuse_evidence(flow_tok, mask_tok, density_tok)
+        evidence_stats = {
+            "evidence_patch_visible_mean": patch_valid_fraction.mean(),
+            "evidence_patch_empty_frac": (patch_valid_fraction <= 0)
+                .float().mean(),
+            "evidence_flow_token_norm": flow_tok.norm(dim=-1).mean(),
+            "evidence_mask_token_norm": mask_tok.norm(dim=-1).mean(),
+            "evidence_density_token_norm": density_tok.norm(dim=-1).mean(),
+            "evidence_fused_token_norm": evidence_tok.norm(dim=-1).mean(),
+        }
+        return evidence_tok, evidence_stats
 
     def embed_sup_token(self, visible_ratio: torch.Tensor) -> torch.Tensor:
         """Build supervision density token from scalar visible_ratio [B]."""
@@ -642,7 +730,8 @@ class CorrespondenceReprModel(nn.Module):
 
         src_rgb_tok, tgt_rgb_tok = self.embed_rgb(src_rgb, tgt_rgb)
         src_dino_tok, tgt_dino_tok = self.embed_dino(src_dino, tgt_dino)
-        evidence_tok = self.embed_evidence(observed_flow, observed_valid)
+        evidence_tok, evidence_stats = self.embed_evidence(
+            observed_flow, observed_valid)
         readout_tok = self.embed_readout(bsz, device)
 
         # Pre-encoder side-factor readouts (before any mixing)
@@ -706,6 +795,7 @@ class CorrespondenceReprModel(nn.Module):
         outputs: dict[str, Any] = {
             "encoded_readout": encoded_readout,
             "encoded_evidence": encoded_evidence,
+            **evidence_stats,
             **pre_encoder_outputs,
         }
 
