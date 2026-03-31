@@ -179,6 +179,42 @@ class CorrespondenceReprLightningModule(pl.LightningModule):
         return flow * flow_scale.view(-1, 1, 1, 1).to(
             device=flow.device, dtype=flow.dtype)
 
+    def _completion_metrics(
+        self,
+        pred_flow_px: torch.Tensor,
+        target_flow_px: torch.Tensor,
+        observed_valid: torch.Tensor,
+        valid: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
+        observed_mask = observed_valid * valid
+        missing_mask = (1.0 - observed_valid) * valid
+        copy_baseline_px = target_flow_px * observed_mask.unsqueeze(1)
+
+        valid_pixels = valid.sum().clamp_min(1.0)
+        observed_ratio = observed_mask.sum() / valid_pixels
+        missing_ratio = missing_mask.sum() / valid_pixels
+        observed_epe = self.model.endpoint_error(
+            pred_flow_px, target_flow_px, observed_mask)
+        missing_epe = self.model.endpoint_error(
+            pred_flow_px, target_flow_px, missing_mask)
+        copy_epe = self.model.endpoint_error(
+            copy_baseline_px, target_flow_px, valid)
+        copy_missing_epe = self.model.endpoint_error(
+            copy_baseline_px, target_flow_px, missing_mask)
+        missing_gain = copy_missing_epe - missing_epe
+        missing_gain_frac = missing_gain / copy_missing_epe.clamp_min(1e-6)
+
+        return {
+            "observed_ratio": observed_ratio,
+            "missing_ratio": missing_ratio,
+            "observed_epe": observed_epe,
+            "missing_epe": missing_epe,
+            "copy_epe": copy_epe,
+            "copy_missing_epe": copy_missing_epe,
+            "missing_gain": missing_gain,
+            "missing_gain_frac": missing_gain_frac,
+        }
+
     # -------------------------------------------------------------------
     # DINO probe helper (for datasets without precomputed DINO features)
     # -------------------------------------------------------------------
@@ -330,7 +366,12 @@ class CorrespondenceReprLightningModule(pl.LightningModule):
         pred_flow_px = self._pixel_space_flow(student_out["pred_flow"],
                                                flow_scale)
         target_flow_px = self._pixel_space_flow(flow, flow_scale)
-
+        completion = self._completion_metrics(
+            pred_flow_px,
+            target_flow_px,
+            student_view["observed_valid"],
+            valid,
+        )
         epe = self.model.endpoint_error(pred_flow_px, target_flow_px, valid)
 
         self.log("train/loss", loss_total, prog_bar=True, on_step=True,
@@ -356,6 +397,30 @@ class CorrespondenceReprLightningModule(pl.LightningModule):
                  on_step=False, on_epoch=True, batch_size=B)
         self.log("train/student_visible_ratio",
                  student_view["visible_ratio"].mean(),
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/observed_ratio",
+                 completion["observed_ratio"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/missing_ratio",
+                 completion["missing_ratio"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/observed_epe",
+                 completion["observed_epe"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/missing_epe",
+                 completion["missing_epe"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/copy_baseline_epe",
+                 completion["copy_epe"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/copy_baseline_missing_epe",
+                 completion["copy_missing_epe"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/missing_gain_over_copy",
+                 completion["missing_gain"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/missing_gain_frac",
+                 completion["missing_gain_frac"],
                  on_step=False, on_epoch=True, batch_size=B)
         self.log("train/projected_latent_norm",
                  z.norm(dim=-1).mean(),
@@ -433,6 +498,12 @@ class CorrespondenceReprLightningModule(pl.LightningModule):
         flow_scale = batch.get("flow_scale")
         pred_flow_px = self._pixel_space_flow(outputs["pred_flow"], flow_scale)
         target_flow_px = self._pixel_space_flow(batch["flow"], flow_scale)
+        completion = self._completion_metrics(
+            pred_flow_px,
+            target_flow_px,
+            outputs["observed_valid"],
+            batch["valid"],
+        )
         epe = self.model.endpoint_error(pred_flow_px, target_flow_px,
                                          batch["valid"])
 
@@ -444,6 +515,23 @@ class CorrespondenceReprLightningModule(pl.LightningModule):
                  batch_size=B)
         self.log("val_epe", epe, prog_bar=False, on_step=False, on_epoch=True,
                  batch_size=B)
+        self.log("val/observed_ratio", completion["observed_ratio"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("val/missing_ratio", completion["missing_ratio"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("val/observed_epe", completion["observed_epe"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("val/missing_epe", completion["missing_epe"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("val/copy_baseline_epe", completion["copy_epe"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("val/copy_baseline_missing_epe",
+                 completion["copy_missing_epe"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("val/missing_gain_over_copy", completion["missing_gain"],
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("val/missing_gain_frac", completion["missing_gain_frac"],
+                 on_step=False, on_epoch=True, batch_size=B)
 
         if self.example_batch is None:
             obs_flow_px = self._pixel_space_flow(
