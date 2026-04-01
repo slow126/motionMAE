@@ -188,4 +188,22 @@ def collate_common_samples(
     for key, val in batch.items():
         if isinstance(val, torch.Tensor) and val.device != target_device:
             batch[key] = val.to(target_device, non_blocking=(target_device.type == "cuda"))
+
+    # Preserve lightweight provenance for pooled / mixed-source experiments.
+    if any(s.meta for s in samples):
+        meta = [s.meta or {} for s in samples]
+        source_dataset = [m.get("source_dataset") for m in meta]
+        if any(v is not None for v in source_dataset):
+            batch["source_dataset"] = source_dataset
+        source_split = [m.get("source_split") for m in meta]
+        if any(v is not None for v in source_split):
+            batch["source_split"] = source_split
+        for key in ["source_sample_id", "manifest_idx", "pair_id", "source_dataset_idx", "sample_idx"]:
+            vals = [m.get(key) for m in meta]
+            if any(v is not None for v in vals):
+                batch[key] = torch.tensor(
+                    [(-1 if v is None else int(v)) for v in vals],
+                    dtype=torch.int64,
+                    device=target_device,
+                )
     return batch

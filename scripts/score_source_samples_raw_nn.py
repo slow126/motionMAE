@@ -138,6 +138,58 @@ def _extract_sparse_vec4(
     return vec4, int(src_pts.shape[0])
 
 
+def _extract_sparse_pair_entry_vec4(
+    entry: Dict,
+    max_displacement: Optional[float],
+    max_points_per_pair: Optional[int],
+) -> Tuple[np.ndarray, int]:
+    src_pts = np.asarray(entry["src_kps"], dtype=np.float32)
+    trg_pts = np.asarray(entry["trg_kps"], dtype=np.float32)
+    if src_pts.ndim != 2 or src_pts.shape[1] != 2 or trg_pts.shape != src_pts.shape:
+        raise ValueError(
+            f"Expected pooled sparse entry src_kps/trg_kps shape (N,2), got {src_pts.shape} and {trg_pts.shape}"
+        )
+
+    valid = np.isfinite(src_pts).all(axis=1)
+    valid &= np.isfinite(trg_pts).all(axis=1)
+    valid &= ~((src_pts[:, 0] == 0.0) & (src_pts[:, 1] == 0.0))
+    valid &= ~((trg_pts[:, 0] == 0.0) & (trg_pts[:, 1] == 0.0))
+
+    if max_displacement is not None and max_displacement > 0:
+        idx = np.flatnonzero(valid)
+        if idx.size > 0:
+            disp = trg_pts[idx] - src_pts[idx]
+            keep = np.linalg.norm(disp, axis=1) <= float(max_displacement)
+            valid[idx] &= keep
+
+    valid_idx = np.flatnonzero(valid)
+    if max_points_per_pair is not None and max_points_per_pair > 0 and valid_idx.size > max_points_per_pair:
+        valid_idx = valid_idx[: int(max_points_per_pair)]
+
+    if valid_idx.size == 0:
+        return np.zeros((0, 4), dtype=np.float32), int(src_pts.shape[0])
+
+    src_keep = src_pts[valid_idx].astype(np.float32, copy=False)
+    trg_keep = trg_pts[valid_idx].astype(np.float32, copy=False)
+    dxdy = (trg_keep - src_keep).astype(np.float32, copy=False)
+    vec4 = np.concatenate([src_keep, dxdy], axis=1).astype(np.float32, copy=False)
+    return vec4, int(src_pts.shape[0])
+
+
+def _maybe_fixed_k_subsample(
+    vec4: np.ndarray,
+    fixed_query_k: int,
+    seed: int,
+    manifest_idx: int,
+    source_dataset: str,
+) -> np.ndarray:
+    if source_dataset != "pointodyssey" or fixed_query_k <= 0 or vec4.shape[0] <= fixed_query_k:
+        return vec4
+    rng = np.random.default_rng(int(seed) + int(manifest_idx) * 73856093 + vec4.shape[0] * 19349663)
+    chosen = rng.choice(vec4.shape[0], size=int(fixed_query_k), replace=False)
+    return vec4[np.sort(chosen)]
+
+
 def _prepare_raw_vectors(
     vec4: np.ndarray,
     raw_space: str,
@@ -283,6 +335,13 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--save-format", type=str, default="csv", choices=["csv", "parquet"])
     p.add_argument("--top-fraction", type=float, default=None, help="Optional top fraction by k=1 distance")
     p.add_argument("--subset-output", type=Path, default=None, help="Optional JSON subset output path")
+    p.add_argument(
+        "--fixed-query-k",
+        type=int,
+        default=0,
+        help="Optional fixed K for source-side query points. If >0, randomly subsample each query to K points when it has more than K.",
+    )
+    p.add_argument("--seed", type=int, default=2021)
     return p.parse_args()
 
 
@@ -366,14 +425,32 @@ def main() -> None:
 
     for i, manifest_idx in enumerate(indices):
         entry = entries[manifest_idx]
-        ann = cache.get(_resolve_anno_path(entry, args.pointodyssey_root))
-        vec4, n_total = _extract_sparse_vec4(
-            ann=ann,
-            entry=entry,
-            reverse_flow=args.reverse_flow,
-            trust_manifest=args.trust_manifest,
-            max_displacement=args.max_displacement,
-            max_points_per_pair=args.max_points_per_pair,
+        source_dataset = str(entry.get("source_dataset", "pointodyssey")).lower()
+        if source_dataset == "pointodyssey":
+            ann = cache.get(_resolve_anno_path(entry, args.pointodyssey_root))
+            vec4, n_total = _extract_sparse_vec4(
+                ann=ann,
+                entry=entry,
+                reverse_flow=args.reverse_flow,
+                trust_manifest=args.trust_manifest,
+                max_displacement=args.max_displacement,
+                max_points_per_pair=args.max_points_per_pair,
+            )
+        elif source_dataset in {"spair", "pfpascal", "pfwillow"}:
+            vec4, n_total = _extract_sparse_pair_entry_vec4(
+                entry=entry,
+                max_displacement=args.max_displacement,
+                max_points_per_pair=args.max_points_per_pair,
+            )
+        else:
+            raise ValueError(f"Unsupported source_dataset in manifest: {source_dataset}")
+
+        vec4 = _maybe_fixed_k_subsample(
+            vec4,
+            fixed_query_k=int(args.fixed_query_k),
+            seed=int(args.seed),
+            manifest_idx=int(manifest_idx),
+            source_dataset=source_dataset,
         )
         n_valid = int(vec4.shape[0])
         if n_valid > 0:
@@ -388,6 +465,9 @@ def main() -> None:
             "sample_id": int(entry.get("pair_id", manifest_idx)),
             "clip_id": str(entry.get("seq_id", entry.get("seq_rel_path", entry.get("seq_path", "")))),
             "manifest_idx": int(manifest_idx),
+            "source_dataset": source_dataset,
+            "source_split": str(entry.get("source_split", "train")),
+            "source_sample_id": int(entry.get("source_sample_id", entry.get("pair_id", manifest_idx))),
             "frame_i": int(entry.get("frame_i", -1)),
             "frame_j": int(entry.get("frame_j", -1)),
             "dt": int(entry.get("dt", int(entry.get("frame_j", 0)) - int(entry.get("frame_i", 0)))),

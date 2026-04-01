@@ -11,8 +11,8 @@ Supported benchmarks:
   kitti2012  -- KittiSimpleDataset, val split
   kitti2015  -- KittiSimpleDataset, val split
   tss        -- TSSSimpleDataset
-  pfpascal   -- CorrespondenceDataset (pfpascal, val split)
-  pfwillow   -- CorrespondenceDataset (pfwillow, test split)
+  pfpascal   -- CorrespondenceDataset (pfpascal, configurable split; default val)
+  pfwillow   -- CorrespondenceDataset (pfwillow, configurable split; default test)
 
 Usage:
   python scripts/extract_benchmark_vectors.py \\
@@ -58,6 +58,20 @@ def parse_args() -> argparse.Namespace:
         "--cats-datapath",
         default="./models/Datasets_CATs",
         help="datapath arg for CorrespondenceDataset (pfpascal / pfwillow)",
+    )
+    p.add_argument(
+        "--pfpascal-split",
+        type=str,
+        default="val",
+        choices=["trn", "val", "test"],
+        help="PF-PASCAL split to extract (default: val).",
+    )
+    p.add_argument(
+        "--pfwillow-split",
+        type=str,
+        default="test",
+        choices=["test"],
+        help="PF-WILLOW split to extract (default: test).",
     )
     p.add_argument(
         "--size",
@@ -233,10 +247,10 @@ def main() -> None:
     elif args.benchmark == "tss":
         vectors = _extract_tss(Path(args.tss_root), max_kps=args.max_kps_per_pair)
     elif args.benchmark == "pfpascal":
-        vectors = _extract_corr("pfpascal", args.cats_datapath, split="val",
+        vectors = _extract_corr("pfpascal", args.cats_datapath, split=args.pfpascal_split,
                                 size=args.size, max_kps=args.max_kps_per_pair)
     elif args.benchmark == "pfwillow":
-        vectors = _extract_corr("pfwillow", args.cats_datapath, split="test",
+        vectors = _extract_corr("pfwillow", args.cats_datapath, split=args.pfwillow_split,
                                 size=args.size, max_kps=args.max_kps_per_pair)
     else:
         raise ValueError(args.benchmark)

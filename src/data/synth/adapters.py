@@ -7,6 +7,7 @@ import models.CATs_PlusPlus.data.download as download
 from src.data.synth.datasets.FlyingThingsDataset import FlyingThingsSimpleDataset
 from src.data.synth.datasets.PointOdysseyCorrespondence import PointOdysseySimpleDataset
 from src.data.synth.datasets.PointOdysseyPairManifestDataset import PointOdysseyPairManifestDataset
+from src.data.synth.datasets.PooledPairManifestDataset import PooledPairManifestDataset
 from src.data.synth.datasets.KittiDataset import KittiSimpleDataset
 from src.data.synth.datasets.OnlineCorrespondenceDataset import OnlineCorrespondenceDataset
 from src.data.synth.datasets.TSSDataset import TSSSimpleDataset
@@ -133,6 +134,50 @@ class PointOdysseyPairsAdapter(BaseAdapter):
             src_kps=raw.get("src_kps"),
             trg_kps=raw.get("trg_kps"),
             n_pts=raw.get("n_pts"),
+        )
+
+    def set_epoch_window(self, start_idx: int, length: int) -> None:
+        if hasattr(self.dataset, "set_epoch_window"):
+            self.dataset.set_epoch_window(start_idx, length)
+
+
+class PooledPairsAdapter(BaseAdapter):
+    name = "pooled_pairs"
+
+    def __init__(self, manifest_path: Optional[str] = None, split: str = "train", **kwargs):
+        _ = split
+        manifest_path = manifest_path or kwargs.get("pooled_pairs_manifest_path", None)
+        if manifest_path is None:
+            raise ValueError("pooled_pairs requires manifest_path or pooled_pairs_manifest_path")
+        self.dataset = PooledPairManifestDataset(
+            manifest_path=manifest_path,
+            subset_mode=kwargs.get("pooled_pairs_subset_mode", "full"),
+            subset_indices_path=kwargs.get("pooled_pairs_subset_indices_path", None),
+            seed=kwargs.get("pooled_pairs_seed", kwargs.get("seed", 2021)),
+            reverse_flow=kwargs.get("reverse_flow", True),
+            pointodyssey_root=kwargs.get("pooled_pairs_pointodyssey_root", None),
+            verbose=kwargs.get("pooled_pairs_verbose", False),
+            trust_manifest=kwargs.get("pooled_pairs_trust_manifest", False),
+            max_points_per_pair=kwargs.get("pooled_pairs_max_points_per_pair", None),
+            random_subsample_within_pair=kwargs.get("pooled_pairs_random_subsample_within_pair", False),
+            cache_arrays_in_memory=kwargs.get("pooled_pairs_cache_arrays_in_memory", True),
+            max_displacement=kwargs.get("pooled_pairs_max_displacement", None),
+            profile=kwargs.get("pooled_pairs_profile", kwargs.get("profile_timing", False)),
+            profile_every=kwargs.get("pooled_pairs_profile_every", kwargs.get("profile_timing_every", 200)),
+        )
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, idx) -> CommonSample:
+        raw = self.dataset[idx]
+        return CommonSample(
+            src_img=raw.get("src_img"),
+            trg_img=raw.get("trg_img"),
+            src_kps=raw.get("src_kps"),
+            trg_kps=raw.get("trg_kps"),
+            n_pts=raw.get("n_pts"),
+            meta=raw.get("meta", {}),
         )
 
     def set_epoch_window(self, start_idx: int, length: int) -> None:
@@ -498,6 +543,7 @@ ADAPTER_REGISTRY = {
     "flyingthings": FlyingThingsAdapter,
     "pointodyssey": PointOdysseyAdapter,
     "pointodyssey_pairs": PointOdysseyPairsAdapter,
+    "pooled_pairs": PooledPairsAdapter,
     "kitti": KittiAdapter,
     "kitti2012": KittiAdapter,
     "kitti2015": KittiAdapter,

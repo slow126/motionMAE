@@ -96,6 +96,22 @@ def _count_manifest(path: Path) -> int:
     return count
 
 
+def _summarize_selected_sources(manifest_path: Path, selected: List[int]) -> Dict[str, int]:
+    wanted = set(int(x) for x in selected)
+    counts: Dict[str, int] = {}
+    with manifest_path.open("r") as f:
+        for idx, line in enumerate(f):
+            if idx not in wanted:
+                continue
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            source = str(row.get("source_dataset", "pointodyssey"))
+            counts[source] = counts.get(source, 0) + 1
+    return counts
+
+
 def main() -> None:
     args = parse_args()
 
@@ -150,6 +166,18 @@ def main() -> None:
     with args.output.open("w") as f:
         json.dump(selected, f)
     print(f"Saved {len(selected)} pair indices → {args.output}")
+
+    source_counts = _summarize_selected_sources(args.manifest_path, selected)
+    if source_counts:
+        summary_path = args.output.with_name(args.output.stem + "_source_counts.json")
+        summary = {
+            "manifest_path": str(args.manifest_path),
+            "subset_path": str(args.output),
+            "selected_count": len(selected),
+            "source_counts": source_counts,
+        }
+        summary_path.write_text(json.dumps(summary, indent=2))
+        print(f"Saved source-count summary → {summary_path}")
 
 
 if __name__ == "__main__":
