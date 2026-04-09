@@ -215,6 +215,44 @@ class CorrespondenceReprLightningModule(pl.LightningModule):
             "missing_gain_frac": missing_gain_frac,
         }
 
+    def _reconstruction_loss(
+        self,
+        pred_flow: torch.Tensor,
+        target_flow: torch.Tensor,
+        valid: torch.Tensor,
+        observed_valid: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        observed_weight = float(
+            self.training_config.get("observed_recon_weight", 0.25))
+        missing_weight = float(
+            self.training_config.get("missing_recon_weight", 1.0))
+
+        observed_mask = observed_valid * valid
+        missing_mask = (1.0 - observed_valid) * valid
+
+        if self.model.config.loss == "l1":
+            per_pixel = (pred_flow - target_flow).abs()
+        else:
+            per_pixel = F.smooth_l1_loss(
+                pred_flow,
+                target_flow,
+                beta=float(self.model.config.smooth_l1_beta),
+                reduction="none",
+            )
+
+        weights = (
+            observed_weight * observed_mask
+            + missing_weight * missing_mask
+        ).unsqueeze(1)
+        denom = weights.sum().clamp_min(1.0) * pred_flow.shape[1]
+        weighted = (per_pixel * weights).sum() / denom
+
+        loss_observed = self.model.compute_reconstruction_loss(
+            pred_flow, target_flow, observed_mask)
+        loss_missing = self.model.compute_reconstruction_loss(
+            pred_flow, target_flow, missing_mask)
+        return weighted, loss_observed, loss_missing
+
     # -------------------------------------------------------------------
     # DINO probe helper (for datasets without precomputed DINO features)
     # -------------------------------------------------------------------
@@ -311,8 +349,14 @@ class CorrespondenceReprLightningModule(pl.LightningModule):
         # -- Losses ----------------------------------------------------------
 
         # 1. Flow reconstruction on all valid pixels
-        loss_recon = self.model.compute_reconstruction_loss(
-            student_out["pred_flow"], flow, valid)
+        loss_recon, loss_recon_observed, loss_recon_missing = (
+            self._reconstruction_loss(
+                student_out["pred_flow"],
+                flow,
+                valid,
+                student_view["observed_valid"],
+            )
+        )
 
         # 2. Consistency: align student and anchor z_corr
         loss_align = F.mse_loss(
@@ -336,16 +380,17 @@ class CorrespondenceReprLightningModule(pl.LightningModule):
                 student_view["visible_ratio"])
 
         # 5. Update EMA stats and compute VICReg losses
-        z = student_out["projected_latent"]
+        z_align = student_out["projected_latent"]
+        z_reg = student_out["projected_latent_raw"]
         vis_ratio = student_view["visible_ratio"]
-        self._update_ema_stats(z, vis_ratio)
+        self._update_ema_stats(z_reg, vis_ratio)
 
         loss_var = self.variance_loss(
-            z,
+            z_reg,
             target_std=float(self.training_config.get("variance_target_std", 1.0)),
             eps=float(self.training_config.get("variance_eps", 1e-4)))
 
-        loss_decorr = self.decorrelation_loss(z, vis_ratio)
+        loss_decorr = self.decorrelation_loss(z_reg, vis_ratio)
 
         # -- Weighted total --------------------------------------------------
 
@@ -378,6 +423,10 @@ class CorrespondenceReprLightningModule(pl.LightningModule):
                  on_epoch=True, batch_size=B)
         self.log("train/loss_recon", loss_recon, on_step=True, on_epoch=True,
                  batch_size=B)
+        self.log("train/loss_recon_observed", loss_recon_observed,
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/loss_recon_missing", loss_recon_missing,
+                 on_step=False, on_epoch=True, batch_size=B)
         self.log("train/loss_align", loss_align, on_step=True, on_epoch=True,
                  batch_size=B)
         self.log("train/loss_rgb_recon", loss_rgb_recon, on_step=False,
@@ -441,10 +490,16 @@ class CorrespondenceReprLightningModule(pl.LightningModule):
                  student_out["evidence_fused_token_norm"],
                  on_step=False, on_epoch=True, batch_size=B)
         self.log("train/projected_latent_norm",
-                 z.norm(dim=-1).mean(),
+                 z_align.norm(dim=-1).mean(),
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/projected_latent_raw_std_mean",
+                 z_reg.std(dim=0, unbiased=False).mean(),
                  on_step=False, on_epoch=True, batch_size=B)
         self.log("train/projected_alignment_mse",
-                 (z - anchor_out["projected_latent"]).pow(2).mean(),
+                 (z_align - anchor_out["projected_latent"]).pow(2).mean(),
+                 on_step=False, on_epoch=True, batch_size=B)
+        self.log("train/pred_flow_std",
+                 student_out["pred_flow"].std(),
                  on_step=False, on_epoch=True, batch_size=B)
 
         # EMA stat monitoring

@@ -148,6 +148,32 @@ class CorrespondenceLightningModule(pl.LightningModule):
         
         flow_gt = gpu_batch[flow_gt_key]
         
+        def _summarize_batch_provenance(batch_dict: Dict[str, Any]) -> str:
+            parts = []
+            source_dataset = batch_dict.get('source_dataset')
+            if isinstance(source_dataset, (list, tuple)) and source_dataset:
+                counts: Dict[str, int] = {}
+                for name in source_dataset:
+                    key = str(name)
+                    counts[key] = counts.get(key, 0) + 1
+                parts.append(
+                    "source_dataset="
+                    + ",".join(f"{k}:{v}" for k, v in sorted(counts.items()))
+                )
+            for key in ('manifest_idx', 'pair_id', 'source_sample_id'):
+                value = batch_dict.get(key)
+                if isinstance(value, torch.Tensor) and value.numel() > 0:
+                    flat = value.detach().view(-1).to('cpu')
+                    finite = flat[flat >= 0]
+                    if finite.numel() > 0:
+                        preview = finite[:8].tolist()
+                        suffix = "" if finite.numel() <= 8 else "..."
+                        parts.append(
+                            f"{key}=min:{int(finite.min().item())},max:{int(finite.max().item())},"
+                            f"head:{preview}{suffix}"
+                        )
+            return " | ".join(parts) if parts else "no_provenance"
+
         # Forward pass
         pred_flow = self.model(gpu_batch['trg_img'], gpu_batch['src_img'])
         if not torch.isfinite(pred_flow).all():
@@ -205,9 +231,19 @@ class CorrespondenceLightningModule(pl.LightningModule):
         if not torch.isfinite(loss):
             self._nonfinite_loss_batches += 1
             self._consecutive_nonfinite_loss += 1
+            pred_isfinite = torch.isfinite(pred_for_loss)
+            gt_isfinite = torch.isfinite(flow_gt_for_loss)
+            pred_finite_ratio = float(pred_isfinite.float().mean().item())
+            gt_finite_ratio = float(gt_isfinite.float().mean().item())
+            pred_abs_max = float(torch.nan_to_num(pred_for_loss.detach(), nan=0.0, posinf=0.0, neginf=0.0).abs().max().item())
+            gt_abs_max = float(torch.nan_to_num(flow_gt_for_loss.detach(), nan=0.0, posinf=0.0, neginf=0.0).abs().max().item())
+            provenance = _summarize_batch_provenance(gpu_batch)
             print(
                 f"[LossGuard] Non-finite training loss at global_step={int(getattr(self.trainer, 'global_step', -1))}, "
-                f"batch_idx={batch_idx}, valid_vectors={valid_count}. Replacing with zero loss.",
+                f"batch_idx={batch_idx}, valid_vectors={valid_count}, "
+                f"pred_finite_ratio={pred_finite_ratio:.4f}, gt_finite_ratio={gt_finite_ratio:.4f}, "
+                f"pred_abs_max={pred_abs_max:.4f}, gt_abs_max={gt_abs_max:.4f}. "
+                f"{provenance}. Replacing with zero loss.",
                 flush=True,
             )
             loss = pred_for_loss[:, :, :0, :0].sum()

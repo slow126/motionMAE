@@ -43,6 +43,14 @@ def parse_fractions(raw: str) -> List[float]:
     return values
 
 
+def fraction_label(fraction: float) -> str:
+    pct = float(fraction) * 100.0
+    rounded = round(pct)
+    if abs(pct - rounded) < 1e-9:
+        return str(int(rounded))
+    return f"{pct:.4f}".rstrip("0").rstrip(".").replace(".", "p")
+
+
 def count_manifest_rows(manifest_path: Path) -> int:
     n = 0
     with manifest_path.open("r") as f:
@@ -83,7 +91,7 @@ def main():
     print(f"Manifest rows: {total}", flush=True)
     for frac in fractions:
         seed = int(args.seed)
-        pct = int(round(frac * 100))
+        pct = fraction_label(frac)
         indices = build_random_indices(total=total, fraction=frac, seed=seed)
         out_path = output_dir / f"subset_random_{pct}_seed{args.seed}.json"
         with out_path.open("w") as f:

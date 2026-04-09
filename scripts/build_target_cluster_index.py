@@ -60,6 +60,20 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--norm-height", type=float, default=512.0)
     p.add_argument("--seed", type=int, default=2021)
     p.add_argument("--max-iters", type=int, default=40)
+    p.add_argument(
+        "--max-target-vectors",
+        type=int,
+        default=0,
+        help="Optional cap on target vectors used for clustering/radius estimation (0 = all).",
+    )
+    p.add_argument("--use-faiss", action="store_true", help="Use FAISS k-means when available.")
+    p.add_argument("--faiss-gpu", action="store_true", help="Use FAISS GPU k-means when available.")
+    p.add_argument(
+        "--faiss-max-points-per-centroid",
+        type=int,
+        default=0,
+        help="Override FAISS max_points_per_centroid; set high enough to prevent internal subsampling (0 = FAISS default).",
+    )
     return p.parse_args()
 
 
@@ -94,6 +108,45 @@ def _run_kmeans_numpy(x: np.ndarray, k: int, seed: int, max_iters: int) -> Tuple
     return centroids.astype(np.float32, copy=False), assignments
 
 
+def _run_kmeans_faiss(
+    x: np.ndarray,
+    k: int,
+    seed: int,
+    max_iters: int,
+    gpu: bool,
+    max_points_per_centroid: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    try:
+        import faiss
+    except Exception as exc:
+        raise RuntimeError(f"FAISS unavailable: {exc}") from exc
+
+    d = int(x.shape[1])
+    kwargs = {
+        "niter": int(max_iters),
+        "verbose": True,
+        "gpu": bool(gpu),
+        "seed": int(seed),
+    }
+    if int(max_points_per_centroid) > 0:
+        kwargs["max_points_per_centroid"] = int(max_points_per_centroid)
+    kmeans = faiss.Kmeans(d=d, k=int(k), **kwargs)
+    kmeans.train(np.asarray(x, dtype=np.float32))
+    centroids = np.asarray(kmeans.centroids, dtype=np.float32).reshape(k, d)
+
+    index = faiss.IndexFlatL2(d)
+    if gpu:
+        try:
+            res = faiss.StandardGpuResources()
+            index = faiss.index_cpu_to_gpu(res, 0, index)
+        except Exception as exc:
+            print(f"[cluster_index] FAISS GPU assignment setup failed: {exc}. Falling back to CPU assign.")
+    index.add(centroids)
+    D, I = index.search(np.asarray(x, dtype=np.float32), 1)
+    assignments = I.reshape(-1).astype(np.int32, copy=False)
+    return centroids, assignments
+
+
 def main() -> None:
     args = parse_args()
     if not (0.0 < float(args.radius_quantile) <= 1.0):
@@ -102,17 +155,40 @@ def main() -> None:
     raw = np.load(args.target_vectors, mmap_mode="r")
     if raw.ndim != 2 or raw.shape[1] < 4:
         raise ValueError(f"Expected target vectors shape (N,4+), got {raw.shape}")
-    x = _prepare_raw_vectors(
+    x_all = _prepare_raw_vectors(
         raw[:, :4],
         raw_space=args.raw_space,
         normalize_norm2x1=args.normalize_norm2x1,
         norm_width=args.norm_width,
         norm_height=args.norm_height,
     ).astype(np.float32, copy=False)
+    rng = np.random.default_rng(int(args.seed))
+    if args.max_target_vectors and int(args.max_target_vectors) > 0 and x_all.shape[0] > int(args.max_target_vectors):
+        sample_n = int(args.max_target_vectors)
+        sample_idx = rng.choice(x_all.shape[0], size=sample_n, replace=False)
+        sample_idx = np.sort(sample_idx)
+        x = np.asarray(x_all[sample_idx], dtype=np.float32)
+        print(f"[cluster_index] sampled {sample_n}/{x_all.shape[0]} target vectors for clustering")
+    else:
+        x = np.asarray(x_all, dtype=np.float32)
 
     k = int(min(max(1, args.num_centroids), x.shape[0]))
     print(f"[cluster_index] clustering n={x.shape[0]} d={x.shape[1]} into k={k}")
-    centroids, assignments = _run_kmeans_numpy(x, k=k, seed=int(args.seed), max_iters=int(args.max_iters))
+    if args.use_faiss:
+        try:
+            centroids, assignments = _run_kmeans_faiss(
+                x,
+                k=k,
+                seed=int(args.seed),
+                max_iters=int(args.max_iters),
+                gpu=bool(args.faiss_gpu),
+                max_points_per_centroid=int(args.faiss_max_points_per_centroid),
+            )
+        except Exception as exc:
+            print(f"[cluster_index] FAISS k-means failed: {exc}. Falling back to NumPy.")
+            centroids, assignments = _run_kmeans_numpy(x, k=k, seed=int(args.seed), max_iters=int(args.max_iters))
+    else:
+        centroids, assignments = _run_kmeans_numpy(x, k=k, seed=int(args.seed), max_iters=int(args.max_iters))
 
     radii = np.zeros((k,), dtype=np.float32)
     counts = np.zeros((k,), dtype=np.int32)
@@ -142,6 +218,10 @@ def main() -> None:
         "min_radius": float(args.min_radius),
         "seed": int(args.seed),
         "max_iters": int(args.max_iters),
+        "max_target_vectors": int(args.max_target_vectors),
+        "used_faiss": bool(args.use_faiss),
+        "faiss_gpu": bool(args.faiss_gpu),
+        "faiss_max_points_per_centroid": int(args.faiss_max_points_per_centroid),
     }
     np.savez_compressed(
         args.output,

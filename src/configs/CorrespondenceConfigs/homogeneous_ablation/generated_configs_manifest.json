@@ -1,0 +1,158 @@
+[
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pointodyssey_clustercov_0p5pct.yaml",
+    "source": "pointodyssey",
+    "method": "clustercov",
+    "fraction": "0p5pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pointodyssey_random_0p5pct.yaml",
+    "source": "pointodyssey",
+    "method": "random",
+    "fraction": "0p5pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pointodyssey_clustercov_1pct.yaml",
+    "source": "pointodyssey",
+    "method": "clustercov",
+    "fraction": "1pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pointodyssey_random_1pct.yaml",
+    "source": "pointodyssey",
+    "method": "random",
+    "fraction": "1pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pointodyssey_clustercov_2pct.yaml",
+    "source": "pointodyssey",
+    "method": "clustercov",
+    "fraction": "2pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pointodyssey_random_2pct.yaml",
+    "source": "pointodyssey",
+    "method": "random",
+    "fraction": "2pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pointodyssey_clustercov_5pct.yaml",
+    "source": "pointodyssey",
+    "method": "clustercov",
+    "fraction": "5pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pointodyssey_random_5pct.yaml",
+    "source": "pointodyssey",
+    "method": "random",
+    "fraction": "5pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pointodyssey_clustercov_10pct.yaml",
+    "source": "pointodyssey",
+    "method": "clustercov",
+    "fraction": "10pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pointodyssey_random_10pct.yaml",
+    "source": "pointodyssey",
+    "method": "random",
+    "fraction": "10pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_spair_clustercov_0p5pct.yaml",
+    "source": "spair",
+    "method": "clustercov",
+    "fraction": "0p5pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_spair_random_0p5pct.yaml",
+    "source": "spair",
+    "method": "random",
+    "fraction": "0p5pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_spair_clustercov_1pct.yaml",
+    "source": "spair",
+    "method": "clustercov",
+    "fraction": "1pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_spair_random_1pct.yaml",
+    "source": "spair",
+    "method": "random",
+    "fraction": "1pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_spair_clustercov_2pct.yaml",
+    "source": "spair",
+    "method": "clustercov",
+    "fraction": "2pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_spair_random_2pct.yaml",
+    "source": "spair",
+    "method": "random",
+    "fraction": "2pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_spair_clustercov_5pct.yaml",
+    "source": "spair",
+    "method": "clustercov",
+    "fraction": "5pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_spair_random_5pct.yaml",
+    "source": "spair",
+    "method": "random",
+    "fraction": "5pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_spair_clustercov_10pct.yaml",
+    "source": "spair",
+    "method": "clustercov",
+    "fraction": "10pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_spair_random_10pct.yaml",
+    "source": "spair",
+    "method": "random",
+    "fraction": "10pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pfpascal_clustercov_2pct.yaml",
+    "source": "pfpascal",
+    "method": "clustercov",
+    "fraction": "2pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pfpascal_random_2pct.yaml",
+    "source": "pfpascal",
+    "method": "random",
+    "fraction": "2pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pfpascal_clustercov_5pct.yaml",
+    "source": "pfpascal",
+    "method": "clustercov",
+    "fraction": "5pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pfpascal_random_5pct.yaml",
+    "source": "pfpascal",
+    "method": "random",
+    "fraction": "5pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pfpascal_clustercov_10pct.yaml",
+    "source": "pfpascal",
+    "method": "clustercov",
+    "fraction": "10pct"
+  },
+  {
+    "config": "src/configs/CorrespondenceConfigs/homogeneous_ablation/homogeneous_pfpascal_random_10pct.yaml",
+    "source": "pfpascal",
+    "method": "random",
+    "fraction": "10pct"
+  }
+]

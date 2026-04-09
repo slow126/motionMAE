@@ -10,6 +10,7 @@ from typing import Sequence
 
 import matplotlib.pyplot as plt
 import pandas as pd
+from validation_curve_utils import load_validation_csv, prepare_series
 
 
 def parse_args() -> argparse.Namespace:
@@ -92,76 +93,6 @@ def parse_args() -> argparse.Namespace:
         help="Path to save figure (default: validation_pck_curve.png).",
     )
     return parser.parse_args()
-
-
-def load_validation_csv(snapshot: pathlib.Path, metric: str) -> pd.DataFrame:
-    csv_path = snapshot / "validation_results.csv"
-    if not csv_path.exists():
-        raise FileNotFoundError(f"Missing validation_results.csv in {snapshot}")
-
-    df = pd.read_csv(csv_path)
-    if "validation_scope" not in df.columns or metric not in df.columns:
-        raise ValueError(f"Unexpected CSV format in {csv_path}")
-
-    df["training_steps"] = pd.to_numeric(df["training_steps"], errors="coerce")
-    df["epoch"] = pd.to_numeric(df["epoch"], errors="coerce")
-    df[metric] = pd.to_numeric(df[metric], errors="coerce")
-    df["validation_scope"] = df["validation_scope"].astype(str)
-    return df
-
-
-def _apply_scope(series: pd.DataFrame, scope: str, x_axis: str) -> pd.DataFrame:
-    if series.empty:
-        return series
-    if scope == "all":
-        return series
-    if scope in {"step", "epoch", "initial"}:
-        return series[series["validation_scope"] == scope].copy()
-
-    # auto: keep one row per x-axis, preferring denser "step" logs, then epoch, then initial.
-    priority = {"step": 0, "epoch": 1, "initial": 2}
-    scoped = series.copy()
-    scoped["_scope_pri"] = scoped["validation_scope"].map(priority).fillna(99).astype(int)
-    scoped = scoped.sort_values([x_axis, "_scope_pri"])
-    scoped = scoped.groupby(x_axis, as_index=False).first()
-    if "_scope_pri" in scoped.columns:
-        scoped = scoped.drop(columns=["_scope_pri"])
-    return scoped
-
-
-def _add_step_zero(df: pd.DataFrame, x_axis: str, metric: str) -> pd.DataFrame:
-    if x_axis != "training_steps" or (df[x_axis] == 0).any():
-        return df
-    if df.empty:
-        return df
-
-    first = df.sort_values(x_axis).iloc[[0]].copy()
-    first[x_axis] = 0
-    if pd.isna(first[metric].iloc[0]):
-        return df
-    return pd.concat([first, df], ignore_index=True)
-
-
-def _prepare_series(
-    df: pd.DataFrame,
-    benchmark: str,
-    args: argparse.Namespace,
-    *,
-    include_zero: bool = False,
-    include_explicit_zero: bool = True,
-) -> pd.DataFrame:
-    series = df[df["benchmark"] == benchmark].copy()
-    if args.target is not None:
-        series = series[series["validation_target"] == args.target]
-    series = series.sort_values(args.x_axis).dropna(subset=[args.x_axis, args.metric])
-    series = _apply_scope(series, args.scope, args.x_axis)
-    if args.exclude_step_zero:
-        series = series[series[args.x_axis] != 0]
-    if not include_explicit_zero:
-        series = series[series[args.x_axis] != 0]
-    if include_zero:
-        series = _add_step_zero(series, args.x_axis, args.metric)
-    return series
 
 
 def plot_single(
@@ -250,7 +181,7 @@ def plot_metric_curves(
             no_series = [
                 (
                     name,
-                    _prepare_series(
+                    prepare_series(
                         df,
                         args.benchmark,
                         args,
@@ -263,7 +194,7 @@ def plot_metric_curves(
             with_series = [
                 (
                     name,
-                    _prepare_series(
+                    prepare_series(
                         df,
                         args.benchmark,
                         args,
@@ -290,7 +221,7 @@ def plot_metric_curves(
             return
 
         series = [
-            (name, _prepare_series(df, args.benchmark, args))
+            (name, prepare_series(df, args.benchmark, args))
             for name, df in zip(run_names, run_dfs)
         ]
         plot_single(ax, series, args, args.benchmark, show_legend=False)
@@ -320,7 +251,7 @@ def plot_metric_curves(
             no_series = [
                 (
                     name,
-                    _prepare_series(
+                    prepare_series(
                         df,
                         bench,
                         args,
@@ -333,7 +264,7 @@ def plot_metric_curves(
             with_series = [
                 (
                     name,
-                    _prepare_series(
+                    prepare_series(
                         df,
                         bench,
                         args,
@@ -382,7 +313,7 @@ def plot_metric_curves(
     axes = axes.flatten()
 
     for idx, bench in enumerate(common_benchmarks):
-        series = [(name, _prepare_series(df, bench, args)) for name, df in zip(run_names, run_dfs)]
+        series = [(name, prepare_series(df, bench, args)) for name, df in zip(run_names, run_dfs)]
         plot_single(axes[idx], series, args, bench)
 
     for j in range(len(common_benchmarks), len(axes)):
@@ -439,7 +370,7 @@ def plot_multi_metric(
 
         for row, bench in enumerate(common_benchmarks):
             series = [
-                (name, _prepare_series(df, bench, args_copy))
+                (name, prepare_series(df, bench, args_copy))
                 for name, df in zip(run_names, run_dfs)
             ]
             plot_single(axes[row][col], series, args_copy, bench, show_legend=False)

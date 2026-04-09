@@ -2,9 +2,9 @@
 """Score source samples by hard target-centroid coverage.
 
 Each source sample is converted into raw vectors in the same space as the target
-cluster index. Each query vector is matched to its nearest target centroid, and
-that centroid is counted as covered when the distance is within the centroid's
-precomputed hard radius.
+cluster index. Each query vector is matched to its top-k nearest target
+centroids, and any centroid whose hard radius contains the query is counted as
+covered.
 
 The output is a CSV with per-sample sparse centroid hits plus a distance-based
 base score that can be used for shortlisting and tie-breaking.
@@ -58,6 +58,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--faiss-nprobe", type=int, default=64)
     p.add_argument("--query-batch-size", type=int, default=8192, help="Samples per progress flush.")
     p.add_argument("--fixed-query-k", type=int, default=0)
+    p.add_argument(
+        "--top-k-centroids",
+        type=int,
+        default=24,
+        help="How many nearest target centroids to check per query vector (default: 24).",
+    )
     p.add_argument("--seed", type=int, default=2021)
     return p.parse_args()
 
@@ -104,7 +110,9 @@ def main() -> None:
     cache = _SparseAnnoCache()
     rows: List[Dict] = []
     batch_size = int(max(1, args.query_batch_size))
+    top_k = int(max(1, min(int(args.top_k_centroids), centroids.shape[0])))
     print(f"[cluster_cov] sample batch size: {batch_size}")
+    print(f"[cluster_cov] centroid neighbors checked per query: {top_k}")
 
     for i, manifest_idx in enumerate(indices):
         entry = entries[manifest_idx]
@@ -146,9 +154,9 @@ def main() -> None:
 
         if n_valid > 0:
             if searcher._index is not None:
-                D, I = searcher._index.search(np.asarray(q, dtype=np.float32), 1)
-                d = np.sqrt(np.maximum(D.reshape(-1), 0.0)).astype(np.float32, copy=False)
-                nearest_idx = I.reshape(-1).astype(np.int32, copy=False)
+                D, I = searcher._index.search(np.asarray(q, dtype=np.float32), top_k)
+                D = np.sqrt(np.maximum(D, 0.0)).astype(np.float32, copy=False)
+                I = I.astype(np.int32, copy=False)
             else:
                 d2 = np.maximum(
                     np.sum(q * q, axis=1, keepdims=True)
@@ -156,15 +164,22 @@ def main() -> None:
                     - 2.0 * (q @ centroids.T),
                     0.0,
                 )
-                d = np.sqrt(np.min(d2, axis=1)).astype(np.float32, copy=False)
-                nearest_idx = np.argmin(d2, axis=1).astype(np.int32, copy=False)
+                part_idx = np.argpartition(d2, kth=top_k - 1, axis=1)[:, :top_k]
+                part_d2 = np.take_along_axis(d2, part_idx, axis=1)
+                order = np.argsort(part_d2, axis=1)
+                I = np.take_along_axis(part_idx, order, axis=1).astype(np.int32, copy=False)
+                D = np.sqrt(np.maximum(np.take_along_axis(part_d2, order, axis=1), 0.0)).astype(
+                    np.float32, copy=False
+                )
 
-            hit_mask = d <= radii[nearest_idx]
-            hit_centroids = np.unique(nearest_idx[hit_mask]).astype(np.int32, copy=False)
+            hit_mask = D <= radii[I]
+            hit_centroids = np.unique(I[hit_mask]).astype(np.int32, copy=False)
             hit_weight = int(np.sum(counts[hit_centroids])) if hit_centroids.size > 0 else 0
-            mean_min_dist = float(np.mean(d))
-            mean_hit_dist = float(np.mean(d[hit_mask])) if np.any(hit_mask) else float("nan")
-            hit_fraction = float(np.mean(hit_mask.astype(np.float32)))
+            min_dist = D[:, 0]
+            mean_min_dist = float(np.mean(min_dist))
+            mean_hit_dist = float(np.mean(D[hit_mask])) if np.any(hit_mask) else float("nan")
+            point_hit_mask = np.any(hit_mask, axis=1)
+            hit_fraction = float(np.mean(point_hit_mask.astype(np.float32)))
         else:
             hit_centroids = np.zeros((0,), dtype=np.int32)
             hit_weight = 0

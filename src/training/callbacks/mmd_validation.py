@@ -117,9 +117,14 @@ class MMDValidationCallback(pl.Callback):
             ),
         }
 
-        # validate_epoch_multi_benchmark puts the model in eval mode; restore mode after.
-        was_training = bool(pl_module.model.training)
+        # Step/initial validation runs outside Lightning's normal validation loop.
+        # Use Lightning's validation-mode hooks so the whole module enters the same
+        # eval context as epoch validation instead of only toggling pl_module.model.
+        manage_validation_mode = scope in {'step', 'initial'}
+        was_training = bool(pl_module.training)
         try:
+            if manage_validation_mode:
+                pl_module.on_validation_model_eval()
             val_results = validate_epoch_multi_benchmark(
                 net=pl_module.model,
                 val_loaders=val_dataloaders,
@@ -133,7 +138,11 @@ class MMDValidationCallback(pl.Callback):
                 mmd_every_n_epochs=mmd_every_n_epochs
             )
         finally:
-            pl_module.model.train(was_training)
+            if manage_validation_mode:
+                if was_training:
+                    pl_module.on_validation_model_train()
+                else:
+                    pl_module.eval()
 
         pl_module.set_val_context(context)
         pl_module.set_val_results(val_results)

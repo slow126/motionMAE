@@ -97,10 +97,12 @@ training:
 
   # Loss weights
   lambda_align: 0.05
-  lambda_rgb_recon: 0.01
+  lambda_rgb_recon: 0.0
   lambda_sup: 0.01
   lambda_var: 0.01
   lambda_decorr: 0.01
+  observed_recon_weight: 0.25
+  missing_recon_weight: 1.0
 
   # EMA settings for VICReg losses
   ema_decay: 0.99

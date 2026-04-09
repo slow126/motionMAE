@@ -224,8 +224,8 @@ class EvidenceSampler:
         """Sample scattered valid pixels — batched via noise ranking."""
         bsz = valid.shape[0]
         device = valid.device
-        count = torch.randint(count_min, count_max + 1, (1,),
-                              device=device).item()
+        counts = torch.randint(count_min, count_max + 1, (bsz,),
+                               device=device)
 
         flat_valid = valid.view(bsz, -1)  # [B, H*W]
         # Random noise; invalid pixels get -1 so they rank last
@@ -233,12 +233,12 @@ class EvidenceSampler:
         noise = noise * flat_valid + (-1.0) * (1.0 - flat_valid)
         # Top-k by noise value = random selection of valid pixels
         n_valid = flat_valid.sum(dim=1).long()  # [B]
-        k = min(int(count), int(flat_valid.shape[1]))
+        k = min(int(counts.max().item()), int(flat_valid.shape[1]))
         if k <= 0:
             return torch.zeros_like(valid)
 
-        # Only keep positions < min(count, n_valid_per_sample)
-        keep_limit = n_valid.clamp_max(k).unsqueeze(1)
+        # Only keep positions < min(count_per_sample, n_valid_per_sample)
+        keep_limit = torch.minimum(n_valid, counts.clamp_max(k)).unsqueeze(1)
         positions = torch.arange(k, device=device).unsqueeze(0)
         keep_mask = (positions < keep_limit).float()
 
@@ -803,10 +803,12 @@ class CorrespondenceReprModel(nn.Module):
 
         if return_latent:
             pair_latent = encoded_readout.mean(dim=1)  # [B, D]
-            projected = self.corr_projector(pair_latent)
+            projected_raw = self.corr_projector(pair_latent)
+            projected = projected_raw
             if self.config.normalize_projector_output:
                 projected = F.normalize(projected, dim=-1)
             outputs["pair_latent"] = pair_latent
+            outputs["projected_latent_raw"] = projected_raw
             outputs["projected_latent"] = projected
 
             # Supervision density prediction

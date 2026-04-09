@@ -112,6 +112,40 @@ def _summarize_selected_sources(manifest_path: Path, selected: List[int]) -> Dic
     return counts
 
 
+def _summarize_manifest_sources(manifest_path: Path) -> Dict[str, int]:
+    counts: Dict[str, int] = {}
+    with manifest_path.open("r") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            source = str(row.get("source_dataset", "pointodyssey"))
+            counts[source] = counts.get(source, 0) + 1
+    return counts
+
+
+def _build_source_selection_summary(
+    selected_counts: Dict[str, int],
+    manifest_counts: Dict[str, int],
+    selected_total: int,
+    manifest_total: int,
+) -> Dict[str, Dict[str, float]]:
+    summary: Dict[str, Dict[str, float]] = {}
+    all_sources = sorted(set(manifest_counts) | set(selected_counts))
+    for source in all_sources:
+        selected = int(selected_counts.get(source, 0))
+        total = int(manifest_counts.get(source, 0))
+        summary[source] = {
+            "selected_count": selected,
+            "total_count": total,
+            "selected_fraction_of_subset": (float(selected) / float(selected_total)) if selected_total > 0 else 0.0,
+            "selected_fraction_of_source": (float(selected) / float(total)) if total > 0 else 0.0,
+            "source_fraction_of_manifest": (float(total) / float(manifest_total)) if manifest_total > 0 else 0.0,
+        }
+    return summary
+
+
 def main() -> None:
     args = parse_args()
 
@@ -169,12 +203,21 @@ def main() -> None:
 
     source_counts = _summarize_selected_sources(args.manifest_path, selected)
     if source_counts:
+        manifest_source_counts = _summarize_manifest_sources(args.manifest_path)
         summary_path = args.output.with_name(args.output.stem + "_source_counts.json")
         summary = {
             "manifest_path": str(args.manifest_path),
             "subset_path": str(args.output),
             "selected_count": len(selected),
+            "manifest_count": total,
             "source_counts": source_counts,
+            "manifest_source_counts": manifest_source_counts,
+            "source_selection_summary": _build_source_selection_summary(
+                selected_counts=source_counts,
+                manifest_counts=manifest_source_counts,
+                selected_total=len(selected),
+                manifest_total=total,
+            ),
         }
         summary_path.write_text(json.dumps(summary, indent=2))
         print(f"Saved source-count summary → {summary_path}")
