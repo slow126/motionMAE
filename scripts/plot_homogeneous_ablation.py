@@ -123,7 +123,13 @@ def discover_runs(snapshots_dir: Path) -> List[RunInfo]:
         label = f"{source}_{method}_{frac_label}"
         runs.append(RunInfo(source, method, frac_label, frac, d, label))
 
-    return runs
+    # When multiple snapshots exist for the same (source, method, fraction),
+    # keep only the latest one (last in sorted order = newest timestamp).
+    seen: dict[str, RunInfo] = {}
+    for r in runs:
+        key = f"{r.source}_{r.method}_{r.fraction_label}"
+        seen[key] = r  # last one wins (sorted order = chronological)
+    return list(seen.values())
 
 
 def load_pck(snapshot_dir: Path, scope: str) -> Optional[pd.DataFrame]:
