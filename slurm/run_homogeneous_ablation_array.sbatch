@@ -74,7 +74,6 @@ echo "[homog_abl] started   = $(date)"
 echo "========================================"
 
 cd "$REPO_ROOT"
-python3 -u train_lightning.py --config "$CONFIG" \
-    2>&1 | tee "$LOG_DIR/${CONFIG_NAME}_${SLURM_ARRAY_TASK_ID}.log"
+python3 -u train_lightning.py --config "$CONFIG"
 
 echo "[homog_abl] finished = $(date)"
