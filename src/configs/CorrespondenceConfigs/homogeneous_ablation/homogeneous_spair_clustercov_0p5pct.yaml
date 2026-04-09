@@ -85,7 +85,7 @@ evaluation:
   use_motion_aware: false
   min_motion_pixels: 5.0
   zero_threshold: 0.5
-  datapath: ./models/Datasets_CATs
+  datapath: /home/slow1/Projects/OnlineSyntheticCorrespondence/models/Datasets_CATs
   tss_root: /home/slow1/Data/correspondence/TSS_CVPR2016
   kitti_root: /home/slow1/Data/correspondence/kitti
   kitti_val_use_full_training: true

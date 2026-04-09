@@ -80,6 +80,7 @@ RC_PATH_REWRITES = {
     "/home/spencer/Data/correspondence/TSS_CVPR2016": "/home/slow1/Data/correspondence/TSS_CVPR2016",
     "/home/spencer/Data/correspondence/kitti": "/home/slow1/Data/correspondence/kitti",
     "/home/spencer/Data/FlyingThings3D_tiny": "/home/slow1/Data/FlyingThings3D_Pytorch",
+    "./models/Datasets_CATs": "/home/slow1/Projects/OnlineSyntheticCorrespondence/models/Datasets_CATs",
 }
 
 
