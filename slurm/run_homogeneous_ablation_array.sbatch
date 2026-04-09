@@ -74,6 +74,6 @@ echo "[homog_abl] started   = $(date)"
 echo "========================================"
 
 cd "$REPO_ROOT"
-python3 -u train_lightning.py --config "$CONFIG"
+srun --unbuffered python3 -u train_lightning.py --config "$CONFIG"
 
 echo "[homog_abl] finished = $(date)"
