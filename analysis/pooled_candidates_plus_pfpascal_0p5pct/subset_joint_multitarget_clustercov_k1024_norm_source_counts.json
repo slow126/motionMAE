@@ -1,0 +1,60 @@
+{
+  "manifest_path": "analysis/pooled_candidates_plus_pfpascal/manifest.jsonl",
+  "subset_path": "analysis/pooled_candidates_plus_pfpascal_0p5pct/subset_joint_multitarget_clustercov_k1024_norm.json",
+  "method": "joint_multitarget_clustercov",
+  "selected_count": 22495,
+  "manifest_count": 4499033,
+  "fraction": 0.005,
+  "budget": 22495,
+  "alpha": 1.0,
+  "normalize_by_n_valid": true,
+  "normalize_by_n_centroids": false,
+  "shortlist_count": 0,
+  "benchmarks": {
+    "kitti2012": {
+      "weight": 1.0,
+      "target_n_valid_ceiling": 0,
+      "candidates": 4499033,
+      "centroids_covered": 1018,
+      "centroids_total": 1024
+    },
+    "kitti2015": {
+      "weight": 1.0,
+      "target_n_valid_ceiling": 0,
+      "candidates": 4499033,
+      "centroids_covered": 1011,
+      "centroids_total": 1024
+    },
+    "pfpascal": {
+      "weight": 1.0,
+      "target_n_valid_ceiling": 0,
+      "candidates": 4499033,
+      "centroids_covered": 871,
+      "centroids_total": 1024
+    },
+    "pfwillow": {
+      "weight": 1.0,
+      "target_n_valid_ceiling": 0,
+      "candidates": 4499033,
+      "centroids_covered": 1006,
+      "centroids_total": 1024
+    },
+    "tss": {
+      "weight": 1.0,
+      "target_n_valid_ceiling": 0,
+      "candidates": 4499033,
+      "centroids_covered": 1024,
+      "centroids_total": 1024
+    }
+  },
+  "source_counts": {
+    "spair": 15709,
+    "pointodyssey": 5677,
+    "pfpascal": 1109
+  },
+  "manifest_source_counts": {
+    "pointodyssey": 4442753,
+    "spair": 53340,
+    "pfpascal": 2940
+  }
+}

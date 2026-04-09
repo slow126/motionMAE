@@ -7,20 +7,54 @@ import pathlib
 import pandas as pd
 
 
+def _infer_validation_scope(df: pd.DataFrame) -> pd.Series:
+    if "training_steps" not in df.columns:
+        raise ValueError("Cannot infer validation_scope without training_steps.")
+
+    scope = pd.Series("epoch", index=df.index, dtype="object")
+    if "epoch" in df.columns:
+        scope = scope.where(df["training_steps"].ne(0), "initial")
+    else:
+        scope = scope.where(df["training_steps"].ne(0), "initial")
+
+    nonzero_steps = df.loc[df["training_steps"].ne(0), "training_steps"].dropna()
+    if not nonzero_steps.empty and (nonzero_steps % 1000 == 0).all():
+        scope.loc[df["training_steps"].ne(0)] = "step"
+    return scope
+
+
+def _ensure_validation_columns(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+
+    if "validation_scope" not in out.columns:
+        out["validation_scope"] = _infer_validation_scope(out)
+    else:
+        out["validation_scope"] = out["validation_scope"].astype(str)
+
+    if "validation_target" not in out.columns:
+        out["validation_target"] = out["training_steps"]
+        epoch_mask = out["validation_scope"] == "epoch"
+        if "epoch" in out.columns:
+            out.loc[epoch_mask, "validation_target"] = out.loc[epoch_mask, "epoch"]
+        out.loc[out["validation_scope"] == "initial", "validation_target"] = 0
+
+    out["validation_target"] = pd.to_numeric(out["validation_target"], errors="coerce")
+    return out
+
+
 def load_validation_csv(snapshot: pathlib.Path, metric: str) -> pd.DataFrame:
     csv_path = snapshot / "validation_results.csv"
     if not csv_path.exists():
         raise FileNotFoundError(f"Missing validation_results.csv in {snapshot}")
 
     df = pd.read_csv(csv_path)
-    if "validation_scope" not in df.columns or metric not in df.columns:
+    if metric not in df.columns:
         raise ValueError(f"Unexpected CSV format in {csv_path}")
 
     df["training_steps"] = pd.to_numeric(df["training_steps"], errors="coerce")
     df["epoch"] = pd.to_numeric(df["epoch"], errors="coerce")
     df[metric] = pd.to_numeric(df[metric], errors="coerce")
-    df["validation_scope"] = df["validation_scope"].astype(str)
-    return df
+    return _ensure_validation_columns(df)
 
 
 def apply_scope(series: pd.DataFrame, scope: str, x_axis: str) -> pd.DataFrame:

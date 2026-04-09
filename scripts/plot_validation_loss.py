@@ -12,6 +12,10 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from validation_curve_utils import load_validation_csv, prepare_series
 
+DEFAULT_LINEWIDTH = 1.2
+DEFAULT_MARKERSIZE = 4.0
+DEFAULT_MARKEREDGEWIDTH = 0.8
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -123,6 +127,9 @@ def plot_single(
             marker=markers[idx % len(markers)],
             linestyle=linestyles[idx % len(linestyles)],
             label=label,
+            linewidth=DEFAULT_LINEWIDTH,
+            markersize=DEFAULT_MARKERSIZE,
+            markeredgewidth=DEFAULT_MARKEREDGEWIDTH,
         )
 
     title = f"{bench} ({suffix})" if suffix else bench
