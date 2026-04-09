@@ -31,7 +31,7 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gpus=1
 #SBATCH --mem=64g
-#SBATCH --partition=cs
+#SBATCH --qos=cs
 
 set -euo pipefail
 
