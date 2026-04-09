@@ -1,0 +1,41 @@
+{
+  "manifest_path": "/home/spencer/Projects/MotionMAE/analysis/pooled_candidates_plus_pfpascal/manifest.jsonl",
+  "subset_path": "/home/spencer/Projects/MotionMAE/analysis/pooled_candidates_plus_pfpascal_0p5pct/subset_multitarget_clustercov_k1024_norm_noshortlist_dedup.json",
+  "selected_count": 22495,
+  "manifest_count": 4499033,
+  "source_counts": {
+    "pointodyssey": 8386,
+    "spair": 13129,
+    "pfpascal": 980
+  },
+  "manifest_source_counts": {
+    "pointodyssey": 4442753,
+    "spair": 53340,
+    "pfpascal": 2940
+  },
+  "source_selection_summary": {
+    "pfpascal": {
+      "selected_count": 980,
+      "total_count": 2940,
+      "selected_fraction_of_subset": 0.04356523671927095,
+      "selected_fraction_of_source": 0.3333333333333333,
+      "source_fraction_of_manifest": 0.0006534737575830184
+    },
+    "pointodyssey": {
+      "selected_count": 8386,
+      "total_count": 4442753,
+      "selected_fraction_of_subset": 0.37279395421204714,
+      "selected_fraction_of_source": 0.0018875683613291127,
+      "source_fraction_of_manifest": 0.9874906452119823
+    },
+    "spair": {
+      "selected_count": 13129,
+      "total_count": 53340,
+      "selected_fraction_of_subset": 0.5836408090686819,
+      "selected_fraction_of_source": 0.24613798275215598,
+      "source_fraction_of_manifest": 0.011855881030434763
+    }
+  },
+  "shortlist_count": 0,
+  "alpha": 1.0
+}

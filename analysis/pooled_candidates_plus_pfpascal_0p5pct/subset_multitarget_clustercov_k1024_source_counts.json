@@ -1,0 +1,12 @@
+{
+  "manifest_path": "analysis/pooled_candidates_plus_pfpascal/manifest.jsonl",
+  "subset_path": "analysis/pooled_candidates_plus_pfpascal_0p5pct/subset_multitarget_clustercov_k1024.json",
+  "selected_count": 19167,
+  "source_counts": {
+    "pointodyssey": 18275,
+    "spair": 644,
+    "pfpascal": 248
+  },
+  "shortlist_count": 100000,
+  "alpha": 1.0
+}

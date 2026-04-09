@@ -1,0 +1,47 @@
+{
+  "manifest_path": "/home/spencer/Projects/MotionMAE/analysis/pooled_candidates_plus_pfpascal/manifest.jsonl",
+  "manifest_total": 4499033,
+  "source_counts": {
+    "pfpascal": 2940,
+    "pointodyssey": 4442753,
+    "spair": 53340
+  },
+  "source_split_counts": {
+    "pfpascal": {
+      "trn": 2940
+    },
+    "pointodyssey": {
+      "train": 4442753
+    },
+    "spair": {
+      "trn": 53340
+    }
+  },
+  "outputs": {
+    "pointodyssey_random": {
+      "path": "/home/spencer/Projects/MotionMAE/analysis/pooled_candidates_plus_pfpascal_source_ablations/subset_pointodyssey_random_0p5_seed2021.json",
+      "count": 22214,
+      "fraction_of_pointodyssey": 0.005
+    },
+    "spair_random": {
+      "path": "/home/spencer/Projects/MotionMAE/analysis/pooled_candidates_plus_pfpascal_source_ablations/subset_spair_random_match_pointodyssey_seed2021.json",
+      "count": 22214,
+      "requested_count": 22214,
+      "matched_pointodyssey_count": 22214
+    },
+    "pfpascal_all": {
+      "path": "/home/spencer/Projects/MotionMAE/analysis/pooled_candidates_plus_pfpascal_source_ablations/subset_pfpascal_all_trn.json",
+      "count": 2940,
+      "split": "trn"
+    },
+    "mixed_balanced": {
+      "path": "/home/spencer/Projects/MotionMAE/analysis/pooled_candidates_plus_pfpascal_source_ablations/subset_mixed_balanced_match_pointodyssey_seed2021.json",
+      "count": 22214,
+      "target_total_budget": 22214,
+      "remaining_budget_after_pfpascal": 19274,
+      "pointodyssey_count": 9637,
+      "spair_count": 9637,
+      "pfpascal_count": 2940
+    }
+  }
+}

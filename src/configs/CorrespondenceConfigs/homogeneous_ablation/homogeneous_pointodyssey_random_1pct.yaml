@@ -28,7 +28,7 @@ training:
   scheduler: step
   step: '[70, 80, 90]'
   step_gamma: 0.5
-  max_steps: null
+  max_steps: 20000
   steps_per_epoch: null
   validation_step_marks: []
   validation_step_interval: 1000
@@ -56,7 +56,7 @@ dataset:
   debug: false
   normalize_images: true
   pooled_pairs_manifest_path: analysis/pooled_candidates_plus_pfpascal/manifest.jsonl
-  pooled_pairs_pointodyssey_root: /home/spencer/Data/PointOdyssey
+  pooled_pairs_pointodyssey_root: /home/slow1/Data/PointOdyssey
   pooled_pairs_subset_mode: heuristic
   pooled_pairs_subset_indices_path: analysis/homogeneous_source_ablation/pointodyssey/subset_random_1pct_seed2021.json
   pooled_pairs_seed: 2021
@@ -86,11 +86,11 @@ evaluation:
   min_motion_pixels: 5.0
   zero_threshold: 0.5
   datapath: ./models/Datasets_CATs
-  tss_root: /home/spencer/Data/correspondence/TSS_CVPR2016
-  kitti_root: /home/spencer/Data/correspondence/kitti
+  tss_root: /home/slow1/Data/correspondence/TSS_CVPR2016
+  kitti_root: /home/slow1/Data/correspondence/kitti
   kitti_val_use_full_training: true
-  pointodyssey_root: /home/spencer/Data/PointOdyssey
-  flyingthings_root: /home/spencer/Data/FlyingThings3D_tiny
+  pointodyssey_root: /home/slow1/Data/PointOdyssey
+  flyingthings_root: /home/slow1/Data/FlyingThings3D_Pytorch
   val_datasets:
     kitti2012:
       split: val

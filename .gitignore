@@ -33,7 +33,11 @@ logs/
 
 # Training outputs and analysis artifacts
 snapshots/
-analysis/
+analysis/*
+# But keep lightweight subset indices for reproducibility / cluster transfer
+!analysis/homogeneous_source_ablation/
+!analysis/pooled_candidates_plus_pfpascal_source_ablations/
+!analysis/pooled_candidates_plus_pfpascal_0p5pct/
 archive/
 debug/
 tmp/

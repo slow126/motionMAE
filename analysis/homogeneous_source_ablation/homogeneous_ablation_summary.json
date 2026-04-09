@@ -1,0 +1,173 @@
+{
+  "manifest_path": "analysis/pooled_candidates_plus_pfpascal/manifest.jsonl",
+  "manifest_total": 4499033,
+  "source_pool_sizes": {
+    "pointodyssey": 4442753,
+    "spair": 53340,
+    "pfpascal": 2940
+  },
+  "fractions": [
+    0.005,
+    0.01,
+    0.02,
+    0.05,
+    0.1
+  ],
+  "sources": [
+    "pointodyssey",
+    "spair",
+    "pfpascal"
+  ],
+  "benchmarks": [
+    "kitti2012",
+    "kitti2015",
+    "pfpascal",
+    "pfwillow",
+    "tss"
+  ],
+  "runs": [
+    {
+      "source": "pointodyssey",
+      "fraction": 0.005,
+      "fraction_label": "0p5pct",
+      "pool_size": 4442753,
+      "budget": 22214,
+      "clustercov_count": 15208,
+      "clustercov_path": "analysis/homogeneous_source_ablation/pointodyssey/subset_clustercov_0p5pct.json",
+      "random_count": 22214,
+      "random_path": "analysis/homogeneous_source_ablation/pointodyssey/subset_random_0p5pct_seed2021.json"
+    },
+    {
+      "source": "pointodyssey",
+      "fraction": 0.01,
+      "fraction_label": "1pct",
+      "pool_size": 4442753,
+      "budget": 44428,
+      "clustercov_count": 29739,
+      "clustercov_path": "analysis/homogeneous_source_ablation/pointodyssey/subset_clustercov_1pct.json",
+      "random_count": 44428,
+      "random_path": "analysis/homogeneous_source_ablation/pointodyssey/subset_random_1pct_seed2021.json"
+    },
+    {
+      "source": "pointodyssey",
+      "fraction": 0.02,
+      "fraction_label": "2pct",
+      "pool_size": 4442753,
+      "budget": 88855,
+      "clustercov_count": 59725,
+      "clustercov_path": "analysis/homogeneous_source_ablation/pointodyssey/subset_clustercov_2pct.json",
+      "random_count": 88855,
+      "random_path": "analysis/homogeneous_source_ablation/pointodyssey/subset_random_2pct_seed2021.json"
+    },
+    {
+      "source": "pointodyssey",
+      "fraction": 0.05,
+      "fraction_label": "5pct",
+      "pool_size": 4442753,
+      "budget": 222138,
+      "clustercov_count": 146924,
+      "clustercov_path": "analysis/homogeneous_source_ablation/pointodyssey/subset_clustercov_5pct.json",
+      "random_count": 222138,
+      "random_path": "analysis/homogeneous_source_ablation/pointodyssey/subset_random_5pct_seed2021.json"
+    },
+    {
+      "source": "pointodyssey",
+      "fraction": 0.1,
+      "fraction_label": "10pct",
+      "pool_size": 4442753,
+      "budget": 444275,
+      "clustercov_count": 279021,
+      "clustercov_path": "analysis/homogeneous_source_ablation/pointodyssey/subset_clustercov_10pct.json",
+      "random_count": 444275,
+      "random_path": "analysis/homogeneous_source_ablation/pointodyssey/subset_random_10pct_seed2021.json"
+    },
+    {
+      "source": "spair",
+      "fraction": 0.005,
+      "fraction_label": "0p5pct",
+      "pool_size": 53340,
+      "budget": 267,
+      "clustercov_count": 206,
+      "clustercov_path": "analysis/homogeneous_source_ablation/spair/subset_clustercov_0p5pct.json",
+      "random_count": 267,
+      "random_path": "analysis/homogeneous_source_ablation/spair/subset_random_0p5pct_seed2021.json"
+    },
+    {
+      "source": "spair",
+      "fraction": 0.01,
+      "fraction_label": "1pct",
+      "pool_size": 53340,
+      "budget": 533,
+      "clustercov_count": 398,
+      "clustercov_path": "analysis/homogeneous_source_ablation/spair/subset_clustercov_1pct.json",
+      "random_count": 533,
+      "random_path": "analysis/homogeneous_source_ablation/spair/subset_random_1pct_seed2021.json"
+    },
+    {
+      "source": "spair",
+      "fraction": 0.02,
+      "fraction_label": "2pct",
+      "pool_size": 53340,
+      "budget": 1067,
+      "clustercov_count": 794,
+      "clustercov_path": "analysis/homogeneous_source_ablation/spair/subset_clustercov_2pct.json",
+      "random_count": 1067,
+      "random_path": "analysis/homogeneous_source_ablation/spair/subset_random_2pct_seed2021.json"
+    },
+    {
+      "source": "spair",
+      "fraction": 0.05,
+      "fraction_label": "5pct",
+      "pool_size": 53340,
+      "budget": 2667,
+      "clustercov_count": 1874,
+      "clustercov_path": "analysis/homogeneous_source_ablation/spair/subset_clustercov_5pct.json",
+      "random_count": 2667,
+      "random_path": "analysis/homogeneous_source_ablation/spair/subset_random_5pct_seed2021.json"
+    },
+    {
+      "source": "spair",
+      "fraction": 0.1,
+      "fraction_label": "10pct",
+      "pool_size": 53340,
+      "budget": 5334,
+      "clustercov_count": 3539,
+      "clustercov_path": "analysis/homogeneous_source_ablation/spair/subset_clustercov_10pct.json",
+      "random_count": 5334,
+      "random_path": "analysis/homogeneous_source_ablation/spair/subset_random_10pct_seed2021.json"
+    },
+    {
+      "source": "pfpascal",
+      "fraction": 0.02,
+      "fraction_label": "2pct",
+      "pool_size": 2940,
+      "budget": 59,
+      "clustercov_count": 45,
+      "clustercov_path": "analysis/homogeneous_source_ablation/pfpascal/subset_clustercov_2pct.json",
+      "random_count": 59,
+      "random_path": "analysis/homogeneous_source_ablation/pfpascal/subset_random_2pct_seed2021.json"
+    },
+    {
+      "source": "pfpascal",
+      "fraction": 0.05,
+      "fraction_label": "5pct",
+      "pool_size": 2940,
+      "budget": 147,
+      "clustercov_count": 108,
+      "clustercov_path": "analysis/homogeneous_source_ablation/pfpascal/subset_clustercov_5pct.json",
+      "random_count": 147,
+      "random_path": "analysis/homogeneous_source_ablation/pfpascal/subset_random_5pct_seed2021.json"
+    },
+    {
+      "source": "pfpascal",
+      "fraction": 0.1,
+      "fraction_label": "10pct",
+      "pool_size": 2940,
+      "budget": 294,
+      "clustercov_count": 194,
+      "clustercov_path": "analysis/homogeneous_source_ablation/pfpascal/subset_clustercov_10pct.json",
+      "random_count": 294,
+      "random_path": "analysis/homogeneous_source_ablation/pfpascal/subset_random_10pct_seed2021.json"
+    }
+  ]
+}
