@@ -503,7 +503,13 @@ def main():
     
     # Train
     print(f"Starting training from epoch {start_epoch + 1}")
-    print(f"Total epochs: {training_config.get('epochs', 50)}")
+    epochs_config = training_config.get('epochs', 50)
+    epochs_display = (
+        f"unbounded (max_steps={max_steps})"
+        if isinstance(epochs_config, int) and epochs_config < 0
+        else epochs_config
+    )
+    print(f"Total epochs: {epochs_display}")
     print(f"GPUs allocated: {devices} / {available_devices} (visible)")
     if devices > 1:
         print(f"DDP strategy: {trainer_kwargs.get('strategy')}")

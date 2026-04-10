@@ -7,7 +7,7 @@ model:
   freeze: true
   pretrained_backbone: true
 training:
-  epochs: 500
+  epochs: -1
   batch_size: 16
   train_shuffle: true
   n_threads: 4
@@ -15,18 +15,18 @@ training:
   train_persistent_workers: true
   train_prefetch_factor: 1
   cpu_threads: 4
-  check_val_every_n_epoch: 10
+  check_val_every_n_epoch: 1000000
   val_check_interval: 1.0
   seed: 2021
-  lr: 0.0001
-  lr_backbone: 3.0e-06
+  lr: 5.0e-05
+  lr_backbone: 1.0e-06
   gradient_clip_val: 1.0
   gradient_clip_algorithm: norm
   nonfinite_abort_patience: 50
   weight_decay: 0.05
   momentum: 0.9
   scheduler: step
-  step: '[350, 400, 450]'
+  step: '[]'
   step_gamma: 0.5
   max_steps: 20000
   steps_per_epoch: null

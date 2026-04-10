@@ -73,7 +73,14 @@ class SummaryCallback(pl.Callback):
         best_val = best_val_per_benchmark.get(primary_benchmark, 0.0)
         
         epoch = trainer.current_epoch
-        epochs = self.training_config.get('epochs', 50)
+        epochs_raw = self.training_config.get('epochs', 50)
+        try:
+            epochs = int(epochs_raw)
+        except (TypeError, ValueError):
+            epochs = 50
+        epoch_limited = epochs > 0
+        max_steps = self.training_config.get('max_steps', None)
+        epochs_display = str(epochs) if epoch_limited else f"unbounded (max_steps={max_steps})"
         # Handle mixed datasets
         is_mixed = self.dataset_config.get('mixed', False) or 'datasets' in self.dataset_config
         if is_mixed:
@@ -89,7 +96,7 @@ class SummaryCallback(pl.Callback):
             f.write("="*50 + "\n")
             f.write(f"Current epoch: {epoch + 1}\n")
             f.write(f"Training time so far: {time.time() - self.train_started:.2f} seconds\n")
-            f.write(f"Total epochs planned: {epochs}\n")
+            f.write(f"Total epochs planned: {epochs_display}\n")
             f.write(f"Best primary benchmark PCK: {best_val:.4f}%\n")
             f.write(f"Best average PCK: {best_avg_pck:.4f}% (epoch {best_avg_epoch})\n")
             f.write(f"Primary benchmark: {primary_benchmark}\n\n")
@@ -119,14 +126,14 @@ class SummaryCallback(pl.Callback):
             f.write(f"Pretrained backbone: {self.model_config.get('pretrained_backbone', True)}\n")
             f.write(f"Augmentation: {self.training_config.get('augmentation', False)}\n")
             
-            is_final = (epoch + 1) >= epochs
+            is_final = epoch_limited and (epoch + 1) >= epochs
             if is_final:
                 f.write(f"\nTraining completed in: {time.time() - self.train_started:.2f} seconds\n")
                 f.write("STATUS: Training completed successfully\n")
             else:
-                f.write(f"\nSTATUS: Training in progress (epoch {epoch + 1}/{epochs})\n")
+                f.write(f"\nSTATUS: Training in progress (epoch {epoch + 1}/{epochs_display})\n")
         
-        if (epoch + 1) >= epochs:
+        if epoch_limited and (epoch + 1) >= epochs:
             print(f"Final training summary saved to: {self.summary_file}")
         else:
             print(f"Training summary updated: {self.summary_file}")

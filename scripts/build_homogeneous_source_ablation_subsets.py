@@ -48,6 +48,14 @@ def parse_args() -> argparse.Namespace:
         help="Comma-separated budget fractions relative to each source pool (default: 0.005,0.01,0.02,0.05,0.10).",
     )
     p.add_argument(
+        "--source-fractions",
+        nargs="*",
+        metavar="SOURCE=FRACS",
+        default=None,
+        help="Per-source fraction overrides, e.g. 'spair=0.02,0.05,0.10,0.25,0.50 pfpascal=0.10,0.25,0.50,0.75,1.0'. "
+             "Overrides --fractions for the specified sources.",
+    )
+    p.add_argument(
         "--sources",
         type=str,
         default="pointodyssey,spair,pfpascal",
@@ -246,8 +254,17 @@ def fraction_label(frac: float) -> str:
 def main() -> None:
     args = parse_args()
     benchmarks = _parse_scores_arg(args.scores)
-    fractions = [float(x.strip()) for x in args.fractions.split(",")]
+    default_fractions = [float(x.strip()) for x in args.fractions.split(",")]
     sources = [s.strip().lower() for s in args.sources.split(",")]
+
+    # Parse per-source fraction overrides
+    source_fractions: Dict[str, List[float]] = {}
+    if args.source_fractions:
+        for entry in args.source_fractions:
+            src_name, frac_str = entry.split("=", 1)
+            source_fractions[src_name.strip().lower()] = [
+                float(x.strip()) for x in frac_str.split(",")
+            ]
 
     # Index manifest by source
     print(f"Indexing manifest by source: {args.manifest_path}")
@@ -270,7 +287,8 @@ def main() -> None:
         "manifest_path": str(args.manifest_path),
         "manifest_total": total,
         "source_pool_sizes": {s: len(source_indices.get(s, [])) for s in sources},
-        "fractions": fractions,
+        "fractions_default": default_fractions,
+        "fractions_per_source": {s: source_fractions.get(s, default_fractions) for s in sources},
         "sources": sources,
         "benchmarks": [name for name, _, _ in benchmarks],
         "runs": [],
@@ -285,6 +303,9 @@ def main() -> None:
         src_index_set = set(src_indices)
         src_dir = args.output_dir / source
         src_dir.mkdir(parents=True, exist_ok=True)
+
+        fractions = source_fractions.get(source, default_fractions)
+        print(f"\n  Fractions for {source}: {fractions}")
 
         for frac in fractions:
             budget = max(1, int(round(pool_size * frac)))

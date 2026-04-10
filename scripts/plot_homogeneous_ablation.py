@@ -34,13 +34,18 @@ import pandas as pd
 
 BENCHMARKS = ["kitti2012", "kitti2015", "pfpascal", "pfwillow", "tss"]
 
-# fraction label -> approximate count for x-axis ordering
+# Known fraction labels -> numeric values for x-axis ordering.
+# Dynamically extended by discover_runs() for any new labels encountered.
 FRACTION_ORDER = {
     "0p5pct": 0.005,
     "1pct": 0.01,
     "2pct": 0.02,
     "5pct": 0.05,
     "10pct": 0.10,
+    "25pct": 0.25,
+    "50pct": 0.50,
+    "75pct": 0.75,
+    "100pct": 1.00,
 }
 
 SOURCE_COLORS = {
@@ -175,7 +180,7 @@ def plot_convergence(runs: List[RunInfo], args: argparse.Namespace) -> Path:
         color = SOURCE_COLORS.get(run.source, "gray")
         ls, marker = METHOD_STYLES.get(run.method, ("-", "o"))
         # Lighten color for smaller fractions
-        alpha = 0.4 + 0.6 * (run.fraction / 0.10)
+        alpha = 0.4 + 0.6 * min(1.0, run.fraction / max(f for f in FRACTION_ORDER.values()))
 
         for idx, bench in enumerate(BENCHMARKS):
             if idx >= len(axes_flat):
@@ -233,14 +238,9 @@ def plot_convergence(runs: List[RunInfo], args: argparse.Namespace) -> Path:
     return out
 
 
-def plot_efficiency(runs: List[RunInfo], args: argparse.Namespace) -> Path:
-    """Plot converged PCK vs subset fraction: one subplot per benchmark,
-    lines per source, solid=clustercov dashed=random."""
-    n_bench = len(BENCHMARKS)
-    cols = min(3, n_bench)
-    rows = math.ceil(n_bench / cols)
-    fig, axes = plt.subplots(rows, cols, figsize=(cols * 5.5, rows * 4), squeeze=False)
-    axes_flat = axes.flatten()
+def plot_efficiency(runs: List[RunInfo], args: argparse.Namespace) -> List[Path]:
+    """Plot converged PCK vs subset fraction: one figure per source,
+    one subplot per benchmark, solid=clustercov dashed=random."""
 
     # Collect converged PCK per (source, method, fraction, benchmark)
     records: List[Dict] = []
@@ -261,23 +261,35 @@ def plot_efficiency(runs: List[RunInfo], args: argparse.Namespace) -> Path:
                 })
 
     if not records:
-        print("No converged results yet — skipping efficiency plot.")
-        return args.output_dir / "homogeneous_ablation_efficiency.png"
+        print("No converged results yet — skipping efficiency plots.")
+        return []
 
     results = pd.DataFrame(records)
+    sources = sorted(results["source"].unique())
+    out_paths: List[Path] = []
 
-    for idx, bench in enumerate(BENCHMARKS):
-        if idx >= len(axes_flat):
-            break
-        ax = axes_flat[idx]
-        bench_df = results[results["benchmark"] == bench]
+    for source in sources:
+        source_df = results[results["source"] == source]
+        fracs_present = sorted(source_df["fraction"].unique())
+        if not fracs_present:
+            continue
 
-        for source in sorted(bench_df["source"].unique()):
-            color = SOURCE_COLORS.get(source, "gray")
+        n_bench = len(BENCHMARKS)
+        cols = min(3, n_bench)
+        rows = math.ceil(n_bench / cols)
+        fig, axes = plt.subplots(rows, cols, figsize=(cols * 5.5, rows * 4), squeeze=False)
+        axes_flat = axes.flatten()
+
+        color = SOURCE_COLORS.get(source, "gray")
+
+        for idx, bench in enumerate(BENCHMARKS):
+            if idx >= len(axes_flat):
+                break
+            ax = axes_flat[idx]
+            bench_df = source_df[source_df["benchmark"] == bench]
+
             for method in ["clustercov", "random"]:
-                subset = bench_df[
-                    (bench_df["source"] == source) & (bench_df["method"] == method)
-                ].sort_values("fraction")
+                subset = bench_df[bench_df["method"] == method].sort_values("fraction")
                 if subset.empty:
                     continue
                 ls, marker = METHOD_STYLES.get(method, ("-", "o"))
@@ -289,48 +301,51 @@ def plot_efficiency(runs: List[RunInfo], args: argparse.Namespace) -> Path:
                     marker=marker,
                     markersize=6,
                     linewidth=1.5,
-                    label=f"{source} {method}",
+                    label=method,
                 )
 
-        ax.set_title(bench, fontsize=11)
-        ax.set_xlabel("budget (% of source pool)")
-        ax.set_ylabel("converged PCK")
-        ax.set_xscale("log")
-        ax.set_xticks([0.5, 1, 2, 5, 10])
-        ax.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
-        ax.grid(alpha=0.3)
+            ax.set_title(bench, fontsize=11)
+            ax.set_xlabel("budget (% of source pool)")
+            ax.set_ylabel("converged PCK")
+            ax.set_xscale("log")
+            tick_pcts = [f * 100 for f in fracs_present]
+            ax.set_xticks(tick_pcts)
+            ax.get_xaxis().set_major_formatter(matplotlib.ticker.ScalarFormatter())
+            ax.grid(alpha=0.3)
 
-    for j in range(len(BENCHMARKS), len(axes_flat)):
-        axes_flat[j].set_visible(False)
+        for j in range(len(BENCHMARKS), len(axes_flat)):
+            axes_flat[j].set_visible(False)
 
-    # Deduplicated legend
-    handles, labels = [], []
-    for ax in axes_flat:
-        h, l = ax.get_legend_handles_labels()
-        for hi, li in zip(h, l):
-            if li not in labels:
-                handles.append(hi)
-                labels.append(li)
+        # Deduplicated legend
+        handles, labels = [], []
+        for ax in axes_flat:
+            h, l = ax.get_legend_handles_labels()
+            for hi, li in zip(h, l):
+                if li not in labels:
+                    handles.append(hi)
+                    labels.append(li)
 
-    fig.legend(
-        handles, labels,
-        loc="upper center",
-        bbox_to_anchor=(0.5, -0.02),
-        ncol=min(4, len(labels)),
-        fontsize=8,
-        frameon=True,
-    )
-    fig.suptitle(
-        f"Homogeneous ablation — efficiency curves (tail-{args.tail_n} median PCK)",
-        fontsize=12,
-    )
-    fig.tight_layout(rect=[0, 0.08, 1, 0.96])
+        fig.legend(
+            handles, labels,
+            loc="upper center",
+            bbox_to_anchor=(0.5, -0.02),
+            ncol=min(4, len(labels)),
+            fontsize=8,
+            frameon=True,
+        )
+        fig.suptitle(
+            f"Homogeneous ablation — {source} efficiency (tail-{args.tail_n} median PCK)",
+            fontsize=12,
+        )
+        fig.tight_layout(rect=[0, 0.06, 1, 0.96])
 
-    out = args.output_dir / "homogeneous_ablation_efficiency.png"
-    fig.savefig(out, dpi=180, bbox_inches="tight")
-    plt.close(fig)
-    print(f"Saved: {out}")
-    return out
+        out = args.output_dir / f"homogeneous_ablation_efficiency_{source}.png"
+        fig.savefig(out, dpi=180, bbox_inches="tight")
+        plt.close(fig)
+        print(f"Saved: {out}")
+        out_paths.append(out)
+
+    return out_paths
 
 
 def main() -> None:

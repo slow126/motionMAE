@@ -18,11 +18,13 @@ CONFIG_OUTPUT_DIR="src/configs/CorrespondenceConfigs/homogeneous_ablation"
 TEMPLATE_CONFIG="src/configs/CorrespondenceConfigs/pointodyssey_spair_pfpascal_pooled_multitarget_clustercov_k1024_norm_noshortlist_dedup_0p5pct_lr1e-4.yaml"
 
 # Training settings
-EPOCHS=500
-STEP_MILESTONES="[350, 400, 450]"
+LR=5e-5
+LR_BACKBONE=1e-6
+EPOCHS=-1
+STEP_MILESTONES="[]"
 MAX_STEPS=20000
 VALIDATION_INTERVAL=1000
-CHECK_VAL_EVERY_N_EPOCH=10
+CHECK_VAL_EVERY_N_EPOCH=1000000
 
 # Scoring CSVs (all 5 benchmarks, existing)
 SCORES=(
@@ -34,14 +36,19 @@ SCORES=(
 )
 
 # Budget fractions (relative to each source pool).
-# PF-PASCAL is tiny (2940 rows), so its low fractions will be skipped by --min-budget.
-# Adjust as needed; trimmed set for wall time: "0.005,0.02,0.10"
-FRACTIONS="0.005,0.01,0.02,0.05,0.10"
+# Per-source fractions chosen so the smallest subset is still large enough to learn.
+#   SPair   (53k pool): 2%, 5%, 10%, 25%, 50%  →  ~1k … 27k examples
+#   PF-PASCAL (2.9k pool): 10%, 25%, 50%, 75%, 100%  →  ~294 … 2940 examples
+FRACTIONS="0.02,0.05,0.10,0.25,0.50"  # default fallback
+SOURCE_FRACTIONS=(
+    "spair=0.02,0.05,0.10,0.25,0.50"
+    "pfpascal=0.10,0.25,0.50,0.75,1.0"
+)
 
-# Sources to process
-SOURCES="pointodyssey,spair,pfpascal"
+# Sources to process for the semantic rerun.
+SOURCES="spair,pfpascal"
 
-# Minimum budget to actually run (skip tiny combos like pfpascal @ 0.5%)
+# Minimum budget to actually run
 MIN_BUDGET=50
 
 # ── Step 1: Build subsets ──────────────────────────────────────────────────
@@ -53,6 +60,7 @@ python scripts/build_homogeneous_source_ablation_subsets.py \
     --manifest-path "$MANIFEST" \
     --scores "${SCORES[@]}" \
     --fractions "$FRACTIONS" \
+    --source-fractions "${SOURCE_FRACTIONS[@]}" \
     --sources "$SOURCES" \
     --shortlist-count 0 \
     --alpha 1.0 \
@@ -71,8 +79,9 @@ python scripts/generate_homogeneous_configs.py \
     --summary "$OUTPUT_DIR/homogeneous_ablation_summary.json" \
     --template "$TEMPLATE_CONFIG" \
     --output-dir "$CONFIG_OUTPUT_DIR" \
-    --lr 1e-4 \
-    --lr-backbone 3e-6 \
+    --sources "$SOURCES" \
+    --lr "$LR" \
+    --lr-backbone "$LR_BACKBONE" \
     --epochs "$EPOCHS" \
     --step-milestones "$STEP_MILESTONES" \
     --max-steps "$MAX_STEPS" \
@@ -94,6 +103,8 @@ done
 
 TOTAL=${#CONFIGS[@]}
 echo "Found $TOTAL configs to train"
+echo "Learning rate: $LR"
+echo "Backbone learning rate: $LR_BACKBONE"
 echo "Epochs per run: $EPOCHS"
 echo "Step milestones: $STEP_MILESTONES"
 echo "Max steps per run: $MAX_STEPS"

@@ -37,6 +37,7 @@ class CheckpointCallback(pl.Callback):
         self.training_config = config.get('training', {})
         self.save_epoch_checkpoints = bool(self.training_config.get('save_epoch_checkpoints', True))
         self.checkpoint_every_n_epochs = int(self.training_config.get('checkpoint_every_n_epochs', 1) or 0)
+        self._checkpointed_step_targets = set()
         
         # Track best performance per benchmark
         # Initialize from pretrained checkpoint if provided (for finetuning)
@@ -63,16 +64,16 @@ class CheckpointCallback(pl.Callback):
                 self.best_val_per_benchmark[benchmark] = 0.0
                 self.best_epoch_per_benchmark[benchmark] = 0
     
-    def on_validation_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
-        """Save best models after validation epoch."""
-        if not getattr(trainer, 'is_global_zero', True):
-            return
-        val_results = pl_module.get_val_results()
-        if not val_results:
-            return
-        
+    def _save_from_results(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        val_results: Dict[str, Any],
+        save_epoch_checkpoint: bool,
+    ):
+        """Save best artifacts from the most recent validation results."""
         epoch = trainer.current_epoch
-        
+
         # Track best performance for each benchmark and save individual models
         for benchmark, results in val_results.items():
             if results['pck'] > self.best_val_per_benchmark[benchmark]:
@@ -143,7 +144,8 @@ class CheckpointCallback(pl.Callback):
         epoch_num = epoch + 1
         max_epochs = int(self.training_config.get('epochs', 0) or 0)
         should_save_epoch = (
-            self.save_epoch_checkpoints
+            save_epoch_checkpoint
+            and self.save_epoch_checkpoints
             and (
                 self.checkpoint_every_n_epochs <= 1
                 or epoch_num % self.checkpoint_every_n_epochs == 0
@@ -174,6 +176,45 @@ class CheckpointCallback(pl.Callback):
         
         if is_best:
             print(f"New best primary benchmark ({primary_benchmark}) PCK: {self.best_val_per_benchmark[primary_benchmark]:.2f}%")
+
+    def on_validation_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule):
+        """Save best models after validation epoch."""
+        if not getattr(trainer, 'is_global_zero', True):
+            return
+        val_results = pl_module.get_val_results()
+        if not val_results:
+            return
+
+        self._save_from_results(trainer, pl_module, val_results, save_epoch_checkpoint=True)
+
+    def on_train_batch_end(
+        self,
+        trainer: pl.Trainer,
+        pl_module: pl.LightningModule,
+        outputs: Dict[str, Any],
+        batch: Any,
+        batch_idx: int,
+        dataloader_idx: int = 0,
+    ):
+        """Save best models after configured step-based validation."""
+        if not getattr(trainer, 'is_global_zero', True):
+            return
+        context = pl_module.get_val_context() if hasattr(pl_module, 'get_val_context') else {}
+        if context.get('validation_scope') != 'step':
+            return
+        step_target = context.get('validation_target')
+        if step_target is None:
+            return
+        step_target = int(step_target)
+        if step_target in self._checkpointed_step_targets:
+            return
+
+        val_results = pl_module.get_val_results()
+        if not val_results:
+            return
+
+        self._save_from_results(trainer, pl_module, val_results, save_epoch_checkpoint=False)
+        self._checkpointed_step_targets.add(step_target)
     
     def _save_benchmark_model(self, benchmark: str, epoch: int, pck_score: float,
                              model_state: Dict, optimizer_state: Dict, scheduler_state: Dict,

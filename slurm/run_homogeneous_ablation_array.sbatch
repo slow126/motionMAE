@@ -9,17 +9,22 @@
 #          --summary analysis/homogeneous_source_ablation/homogeneous_ablation_summary.json \
 #          --template src/configs/CorrespondenceConfigs/pointodyssey_spair_pfpascal_pooled_multitarget_clustercov_k1024_norm_noshortlist_dedup_0p5pct_lr1e-4.yaml \
 #          --output-dir src/configs/CorrespondenceConfigs/homogeneous_ablation \
-#          --lr 1e-4 --lr-backbone 3e-6 --epochs 500 \
-#          --step-milestones '[350, 400, 450]' --max-steps 20000 \
-#          --validation-step-interval 1000 --check-val-every-n-epoch 10 \
+#          --sources spair,pfpascal \
+#          --lr 5e-5 --lr-backbone 1e-6 --epochs -1 \
+#          --step-milestones '[]' --max-steps 20000 \
+#          --validation-step-interval 1000 --check-val-every-n-epoch 1000000 \
 #          --disable-epoch-checkpoints
+#
+#      Per-source fractions (set via --source-fractions in build step):
+#        spair:    2%, 5%, 10%, 25%, 50%   (~1k … 27k examples)
+#        pfpascal: 10%, 25%, 50%, 75%, 100% (~294 … 2940 examples)
 #
 # Usage:
 #   # List filtered configs first to check count:
 #   HOMOG_SOURCES=pfpascal,spair bash slurm/run_homogeneous_ablation_array.sbatch
 #
 #   # Submit (set --array upper bound to filtered config count - 1):
-#   sbatch --array=0-15 slurm/run_homogeneous_ablation_array.sbatch
+#   sbatch --array=0-19 slurm/run_homogeneous_ablation_array.sbatch
 #
 # Optional env overrides:
 #   HOMOG_CONFIG_DIR=src/configs/CorrespondenceConfigs/homogeneous_ablation

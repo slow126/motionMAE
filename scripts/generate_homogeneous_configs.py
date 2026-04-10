@@ -37,6 +37,12 @@ def parse_args() -> argparse.Namespace:
         help="Directory to write generated YAML configs.",
     )
     p.add_argument(
+        "--sources",
+        type=str,
+        default=None,
+        help="Optional comma-separated source filter, e.g. 'spair,pfpascal'.",
+    )
+    p.add_argument(
         "--lr",
         type=float,
         default=None,
@@ -146,10 +152,15 @@ def main() -> None:
     summary = json.loads(args.summary.read_text())
     template = load_yaml(args.template)
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    source_filter = None
+    if args.sources:
+        source_filter = {src.strip() for src in args.sources.split(",") if src.strip()}
 
     generated = []
     for run in summary["runs"]:
         source = run["source"]
+        if source_filter is not None and source not in source_filter:
+            continue
         frac_label = run["fraction_label"]
 
         for method in ("clustercov", "random"):
