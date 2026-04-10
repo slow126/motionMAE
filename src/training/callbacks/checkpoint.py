@@ -34,6 +34,9 @@ class CheckpointCallback(pl.Callback):
         self.save_path = save_path
         self.config = config
         self.eval_config = config['evaluation']
+        self.training_config = config.get('training', {})
+        self.save_epoch_checkpoints = bool(self.training_config.get('save_epoch_checkpoints', True))
+        self.checkpoint_every_n_epochs = int(self.training_config.get('checkpoint_every_n_epochs', 1) or 0)
         
         # Track best performance per benchmark
         # Initialize from pretrained checkpoint if provided (for finetuning)
@@ -134,26 +137,40 @@ class CheckpointCallback(pl.Callback):
         if trainer.lr_scheduler_configs:
             scheduler_state = trainer.lr_scheduler_configs[0].scheduler.state_dict()
         
-        # Save regular epoch checkpoint
-        checkpoint_data = {
-            'epoch': epoch + 1,
-            'state_dict': pl_module.model.module.state_dict() if hasattr(pl_module.model, 'module') else pl_module.model.state_dict(),
-            'optimizer': optimizer_state,
-            'scheduler': scheduler_state,
-            'best_loss': self.best_val_per_benchmark[primary_benchmark],
-            'val_results': val_results,
-            'best_val_per_benchmark': self.best_val_per_benchmark,
-            'best_epoch_per_benchmark': self.best_epoch_per_benchmark,
-            'best_avg_pck': self.best_avg_pck,
-            'best_avg_epoch': self.best_avg_epoch,
-        }
-        
-        save_checkpoint(
-            checkpoint_data,
-            is_best=is_best,
-            save_path=self.save_path,
-            filename=f'epoch_{epoch + 1}.pth'
+        # Save regular epoch checkpoints only when requested. Best checkpoints are
+        # still saved above with fixed filenames, so disabling this avoids
+        # unbounded epoch_N.pth growth without losing best-model artifacts.
+        epoch_num = epoch + 1
+        max_epochs = int(self.training_config.get('epochs', 0) or 0)
+        should_save_epoch = (
+            self.save_epoch_checkpoints
+            and (
+                self.checkpoint_every_n_epochs <= 1
+                or epoch_num % self.checkpoint_every_n_epochs == 0
+                or (max_epochs > 0 and epoch_num >= max_epochs)
+            )
         )
+
+        if should_save_epoch:
+            checkpoint_data = {
+                'epoch': epoch_num,
+                'state_dict': pl_module.model.module.state_dict() if hasattr(pl_module.model, 'module') else pl_module.model.state_dict(),
+                'optimizer': optimizer_state,
+                'scheduler': scheduler_state,
+                'best_loss': self.best_val_per_benchmark[primary_benchmark],
+                'val_results': val_results,
+                'best_val_per_benchmark': self.best_val_per_benchmark,
+                'best_epoch_per_benchmark': self.best_epoch_per_benchmark,
+                'best_avg_pck': self.best_avg_pck,
+                'best_avg_epoch': self.best_avg_epoch,
+            }
+
+            save_checkpoint(
+                checkpoint_data,
+                is_best=is_best,
+                save_path=self.save_path,
+                filename=f'epoch_{epoch_num}.pth'
+            )
         
         if is_best:
             print(f"New best primary benchmark ({primary_benchmark}) PCK: {self.best_val_per_benchmark[primary_benchmark]:.2f}%")

@@ -55,6 +55,12 @@ def parse_args() -> argparse.Namespace:
         help="Override number of epochs (default: use template).",
     )
     p.add_argument(
+        "--step-milestones",
+        type=str,
+        default=None,
+        help="Override step scheduler milestones, e.g. '[350, 400, 450]' or '350,400,450'.",
+    )
+    p.add_argument(
         "--max-steps",
         type=int,
         default=None,
@@ -65,6 +71,24 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=None,
         help="Override validation_step_interval (default: use template).",
+    )
+    p.add_argument(
+        "--check-val-every-n-epoch",
+        type=int,
+        default=None,
+        help="Override check_val_every_n_epoch (default: use template).",
+    )
+    p.add_argument(
+        "--checkpoint-every-n-epochs",
+        type=int,
+        default=None,
+        help="Override regular epoch checkpoint interval (default: use template).",
+    )
+    p.add_argument(
+        "--disable-epoch-checkpoints",
+        action="store_true",
+        default=False,
+        help="Disable growing epoch_N.pth checkpoints while keeping fixed best-model checkpoints.",
     )
     p.add_argument(
         "--rc",
@@ -145,10 +169,18 @@ def main() -> None:
                 cfg["training"]["lr_backbone"] = args.lr_backbone
             if args.epochs is not None:
                 cfg["training"]["epochs"] = args.epochs
+            if args.step_milestones is not None:
+                cfg["training"]["step"] = args.step_milestones
             if args.max_steps is not None:
                 cfg["training"]["max_steps"] = args.max_steps
             if args.validation_step_interval is not None:
                 cfg["training"]["validation_step_interval"] = args.validation_step_interval
+            if args.check_val_every_n_epoch is not None:
+                cfg["training"]["check_val_every_n_epoch"] = args.check_val_every_n_epoch
+            if args.checkpoint_every_n_epochs is not None:
+                cfg["training"]["checkpoint_every_n_epochs"] = args.checkpoint_every_n_epochs
+            if args.disable_epoch_checkpoints:
+                cfg["training"]["save_epoch_checkpoints"] = False
 
             if args.rc:
                 _rewrite_paths_rc(cfg)

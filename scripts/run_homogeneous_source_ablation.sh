@@ -18,8 +18,11 @@ CONFIG_OUTPUT_DIR="src/configs/CorrespondenceConfigs/homogeneous_ablation"
 TEMPLATE_CONFIG="src/configs/CorrespondenceConfigs/pointodyssey_spair_pfpascal_pooled_multitarget_clustercov_k1024_norm_noshortlist_dedup_0p5pct_lr1e-4.yaml"
 
 # Training settings
+EPOCHS=500
+STEP_MILESTONES="[350, 400, 450]"
 MAX_STEPS=20000
 VALIDATION_INTERVAL=1000
+CHECK_VAL_EVERY_N_EPOCH=10
 
 # Scoring CSVs (all 5 benchmarks, existing)
 SCORES=(
@@ -70,8 +73,12 @@ python scripts/generate_homogeneous_configs.py \
     --output-dir "$CONFIG_OUTPUT_DIR" \
     --lr 1e-4 \
     --lr-backbone 3e-6 \
+    --epochs "$EPOCHS" \
+    --step-milestones "$STEP_MILESTONES" \
     --max-steps "$MAX_STEPS" \
-    --validation-step-interval "$VALIDATION_INTERVAL"
+    --validation-step-interval "$VALIDATION_INTERVAL" \
+    --check-val-every-n-epoch "$CHECK_VAL_EVERY_N_EPOCH" \
+    --disable-epoch-checkpoints
 
 # ── Step 3: Train 2-at-a-time on 2 GPUs ───────────────────────────────────
 echo ""
@@ -87,7 +94,10 @@ done
 
 TOTAL=${#CONFIGS[@]}
 echo "Found $TOTAL configs to train"
+echo "Epochs per run: $EPOCHS"
+echo "Step milestones: $STEP_MILESTONES"
 echo "Max steps per run: $MAX_STEPS"
+echo "Validation every N epochs: $CHECK_VAL_EVERY_N_EPOCH"
 echo ""
 
 DONE=0

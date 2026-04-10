@@ -7,7 +7,7 @@ model:
   freeze: true
   pretrained_backbone: true
 training:
-  epochs: 60
+  epochs: 500
   batch_size: 16
   train_shuffle: true
   n_threads: 4
@@ -15,7 +15,7 @@ training:
   train_persistent_workers: true
   train_prefetch_factor: 1
   cpu_threads: 4
-  check_val_every_n_epoch: 1
+  check_val_every_n_epoch: 10
   val_check_interval: 1.0
   seed: 2021
   lr: 0.0001
@@ -26,7 +26,7 @@ training:
   weight_decay: 0.05
   momentum: 0.9
   scheduler: step
-  step: '[70, 80, 90]'
+  step: '[350, 400, 450]'
   step_gamma: 0.5
   max_steps: 20000
   steps_per_epoch: null
@@ -43,6 +43,7 @@ training:
   devices: 1
   ddp_find_unused_parameters: true
   ddp_strategy: ddp_find_unused_parameters_true
+  save_epoch_checkpoints: false
 dataset:
   dataset_name: pooled_pairs
   split: train
