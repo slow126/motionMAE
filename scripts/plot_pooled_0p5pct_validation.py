@@ -19,59 +19,67 @@ from plot_validation_loss import load_validation_csv, plot_metric_curves, plot_m
 
 METHODS: dict[str, dict[str, str]] = {
     "clustercov": {
-        "label": "clustercov",
+        "label": "ClusterCov (shortlist)",
         "prefix": "pointodyssey_spair_pfpascal_pooled_multitarget_clustercov_k1024_0p5pct",
     },
     "clustercov_norm_lr1e4": {
-        "label": "clustercov_norm_lr1e4",
+        "label": "ClusterCov + n_valid",
         "prefix": "pointodyssey_spair_pfpascal_pooled_multitarget_clustercov_k1024_norm_0p5pct_lr1e-4",
     },
     "joint_clustercov_norm_lr1e4": {
-        "label": "joint_clustercov_norm_lr1e4",
+        "label": "Joint ClusterCov + n_valid",
         "prefix": "pointodyssey_spair_pfpascal_pooled_joint_multitarget_clustercov_k1024_norm_0p5pct_lr1e-4",
     },
     "clustercov_norm_noshortlist_lr1e4": {
-        "label": "clustercov_norm_noshortlist_lr1e4",
+        "label": "ClusterCov + n_valid",
         "prefix": "pointodyssey_spair_pfpascal_pooled_multitarget_clustercov_k1024_norm_noshortlist_0p5pct_lr1e-4",
     },
     "clustercov_norm_noshortlist_dedup_lr1e4": {
-        "label": "clustercov_norm_noshortlist_dedup_lr1e4",
+        "label": "ClusterCov + n_valid + dedup",
         "prefix": "pointodyssey_spair_pfpascal_pooled_multitarget_clustercov_k1024_norm_noshortlist_dedup_0p5pct_lr1e-4",
     },
     "mixed_balanced_lr1e4": {
-        "label": "mixed_balanced_lr1e4",
+        "label": "Hand-tuned mixed + random",
         "prefix": "pointodyssey_spair_pfpascal_pooled_mixed_balanced_0p5pct_lr1e-4",
     },
+    "pfpascal_only": {
+        "label": "PF-PASCAL only",
+        "prefix": "pointodyssey_spair_pfpascal_pooled_pfpascal_only",
+    },
     "pointodyssey_only": {
-        "label": "pointodyssey_only",
+        "label": "PointOdyssey only",
         "prefix": "pointodyssey_spair_pfpascal_pooled_pointodyssey_only_0p5pct",
     },
     "clustercov_pointodyssey_only": {
-        "label": "clustercov_pointodyssey_only",
+        "label": "ClusterCov PointOdyssey-only",
         "prefix": "pointodyssey_spair_pfpascal_pooled_multitarget_clustercov_k1024_pointodyssey_only_0p5pct",
     },
     "pooled_random_shuffled": {
-        "label": "pooled_random_shuffled",
+        "label": "Pooled random",
         "prefix": "pointodyssey_spair_pfpascal_pooled_random_0p5pct_shuffled",
     },
     "spair_only_match_pointodyssey": {
-        "label": "spair_only_match_pointodyssey",
+        "label": "SPair-71k only",
         "prefix": "pointodyssey_spair_pfpascal_pooled_spair_only_match_pointodyssey_0p5pct",
     },
 }
 
 DEFAULT_METHODS = [
-    "clustercov",
-    "clustercov_norm_lr1e4",
     "joint_clustercov_norm_lr1e4",
-    "clustercov_norm_noshortlist_lr1e4",
     "clustercov_norm_noshortlist_dedup_lr1e4",
+    "clustercov_norm_noshortlist_lr1e4",
     "mixed_balanced_lr1e4",
+    "pfpascal_only",
     "pointodyssey_only",
-    "clustercov_pointodyssey_only",
     "pooled_random_shuffled",
     "spair_only_match_pointodyssey",
 ]
+
+SOLID_CLUSTER_COV_LABELS = {
+    METHODS["joint_clustercov_norm_lr1e4"]["label"],
+    METHODS["clustercov_norm_noshortlist_dedup_lr1e4"]["label"],
+    METHODS["clustercov_norm_noshortlist_lr1e4"]["label"],
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -172,6 +180,17 @@ def parse_args() -> argparse.Namespace:
         help="Filename for the curve plot inside --output-dir.",
     )
     parser.add_argument(
+        "--smooth-window",
+        default=1,
+        type=int,
+        help="Optional trailing rolling-average window for curve plots (default: 1 = no smoothing).",
+    )
+    parser.add_argument(
+        "--hide-markers",
+        action="store_true",
+        help="Hide per-point markers in curve plots for a cleaner paper-style figure.",
+    )
+    parser.add_argument(
         "--summary-stem",
         default=None,
         help=(
@@ -228,11 +247,13 @@ def build_plot_args(args: argparse.Namespace, output_path: pathlib.Path) -> Simp
         cols=args.cols,
         compare_step_zero=args.compare_step_zero,
         exclude_step_zero=args.exclude_step_zero,
+        hide_markers=args.hide_markers,
         include_step_zero=args.include_step_zero,
         metric=args.metric,
         metrics=args.metrics,
         output=str(output_path),
         scope=args.scope,
+        smooth_window=args.smooth_window,
         snapshots=[],
         target=args.target,
         x_axis=args.x_axis,
@@ -270,7 +291,7 @@ def render_summary(
     runs: list[tuple[str, pathlib.Path]],
     args: argparse.Namespace,
     output_dir: pathlib.Path,
-) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path]:
+) -> tuple[pathlib.Path, pathlib.Path, pathlib.Path, pathlib.Path]:
     if args.last_n <= 0:
         raise ValueError("--last-n must be a positive integer.")
 
@@ -286,13 +307,24 @@ def render_summary(
     csv_path = output_dir / f"{stem}.csv"
     md_path = output_dir / f"{stem}.md"
     png_path = output_dir / f"{stem}.png"
+    mean_png_path = output_dir / f"{stem}_mean.png"
 
     summary_df.to_csv(csv_path, index=False)
     md_path.write_text(build_summary_markdown(summary_df))
-    write_summary_bar_plot(summary_df, png_path)
+    write_summary_bar_plot(
+        summary_df,
+        png_path,
+        solid_run_labels=SOLID_CLUSTER_COV_LABELS,
+    )
+    write_summary_bar_plot(
+        summary_df,
+        mean_png_path,
+        value_column="tail_mean",
+        solid_run_labels=SOLID_CLUSTER_COV_LABELS,
+    )
     print_summary_table(summary_df)
 
-    return csv_path, md_path, png_path
+    return csv_path, md_path, png_path, mean_png_path
 
 
 def main() -> None:
@@ -313,10 +345,11 @@ def main() -> None:
         print(f"Wrote curve plot -> {curve_path}")
 
     if args.mode in {"summary", "both"}:
-        csv_path, md_path, png_path = render_summary(runs, args, output_dir)
+        csv_path, md_path, png_path, mean_png_path = render_summary(runs, args, output_dir)
         print(f"Wrote summary CSV -> {csv_path}")
         print(f"Wrote summary Markdown -> {md_path}")
         print(f"Wrote summary plot -> {png_path}")
+        print(f"Wrote mean summary plot -> {mean_png_path}")
 
 
 if __name__ == "__main__":

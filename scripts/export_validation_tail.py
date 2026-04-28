@@ -8,8 +8,23 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
+from matplotlib.lines import Line2D
 
 from validation_curve_utils import load_validation_csv, prepare_series
+
+BENCHMARK_LABELS = {
+    "kitti2012": "KITTI-2012",
+    "kitti2015": "KITTI-2015",
+    "pfpascal": "PF-PASCAL",
+    "pfwillow": "PF-WILLOW",
+    "tss": "TSS",
+}
+
+METRIC_LABELS = {
+    "loss": "Loss",
+    "pck": "PCK",
+    "pck_motion_aware": "Motion-Aware PCK",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -121,6 +136,14 @@ def determine_benchmarks(run_dfs: list[pd.DataFrame], benchmark: str | None) -> 
     if not benchmarks:
         raise ValueError("No common benchmarks found between snapshots.")
     return benchmarks
+
+
+def pretty_benchmark(bench: str) -> str:
+    return BENCHMARK_LABELS.get(bench, bench)
+
+
+def pretty_metric(metric: str) -> str:
+    return METRIC_LABELS.get(metric, metric.replace("_", " ").title())
 
 
 def _filter_base_rows(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
@@ -371,18 +394,28 @@ def build_summary_markdown(summary_df: pd.DataFrame) -> str:
     return "\n".join(lines)
 
 
-def write_summary_bar_plot(summary_df: pd.DataFrame, output: Path) -> None:
-    compare = summary_df.pivot(index="benchmark", columns="run_label", values="tail_median")
+def write_summary_bar_plot(
+    summary_df: pd.DataFrame,
+    output: Path,
+    *,
+    value_column: str = "tail_median",
+    solid_run_labels: set[str] | None = None,
+) -> None:
+    compare = summary_df.pivot(index="benchmark", columns="run_label", values=value_column)
     compare = compare.sort_index(axis=0)
 
     macro_order = (
-        summary_df.groupby("run_label", as_index=True)["tail_median"]
+        summary_df.groupby("run_label", as_index=True)[value_column]
         .mean()
         .sort_values(ascending=False)
         .index
         .tolist()
     )
     compare = compare.reindex(columns=macro_order)
+    compare.loc["macro_avg"] = compare.mean(axis=0)
+    macro_winner_label: str | None = None
+    if not compare.loc["macro_avg"].isna().all():
+        macro_winner_label = compare.loc["macro_avg"].astype(float).idxmax()
 
     benchmarks = compare.index.tolist()
     run_labels = compare.columns.tolist()
@@ -402,14 +435,58 @@ def write_summary_bar_plot(summary_df: pd.DataFrame, output: Path) -> None:
     for idx, run_label in enumerate(run_labels):
         offsets = [x + x_offset_start + idx * bar_width for x in x_positions]
         heights = compare[run_label].tolist()
-        ax.bar(offsets, heights, width=bar_width, label=run_label)
+        solid = solid_run_labels is not None and run_label in solid_run_labels
+        bars = ax.bar(
+            offsets,
+            heights,
+            width=bar_width,
+            label=f"{run_label}*" if macro_winner_label == run_label else run_label,
+            linewidth=0.9,
+            edgecolor="0.35",
+            hatch=None if solid else "xx",
+        )
+        for bar in bars:
+            bar.set_joinstyle("miter")
+
+    if "macro_avg" in benchmarks:
+        macro_row = compare.loc["macro_avg"]
+        if not macro_row.isna().all():
+            y_max = max(float(compare.max().max()), 0.0)
+            star_offset = max(0.8, y_max * 0.02)
+            best_label = macro_row.astype(float).idxmax()
+            run_idx = run_labels.index(best_label)
+            for bench_idx, benchmark in enumerate(benchmarks):
+                height = float(compare.loc[benchmark, best_label])
+                star_x = x_positions[bench_idx] + x_offset_start + run_idx * bar_width
+                ax.text(
+                    star_x,
+                    height + star_offset,
+                    "*",
+                    ha="center",
+                    va="bottom",
+                    fontsize=16,
+                    fontweight="bold",
+                    color="black",
+                    clip_on=False,
+                )
 
     ax.set_xticks(x_positions)
-    ax.set_xticklabels(benchmarks)
-    ax.set_ylabel("tail_median")
-    ax.set_title("Validation Converged Performance by Benchmark")
+    ax.set_xticklabels(
+        ["Macro Avg" if bench == "macro_avg" else pretty_benchmark(bench) for bench in benchmarks]
+    )
+    summary_meta = summary_df.iloc[0]
+    metric_label = pretty_metric(str(summary_meta["summary_metric"]))
+    tail_n = int(summary_meta["summary_last_n"])
+    stat_label = value_column.replace("tail_", "").replace("_", " ").title()
+    ax.set_ylabel(f"{metric_label} ({stat_label.lower()} of last {tail_n})")
+    ax.set_title(f"Converged Validation {metric_label} by Benchmark ({stat_label})")
     ax.grid(axis="y", alpha=0.3)
-    ax.legend(fontsize=8, ncol=max(1, min(3, (n_runs + 2) // 3)))
+    handles, labels = ax.get_legend_handles_labels()
+    if macro_winner_label is not None:
+        handles.append(Line2D([], [], linestyle="none"))
+        labels.append("* = max macro mean")
+    ax.legend(handles, labels, fontsize=8, ncol=max(1, min(3, (n_runs + 2) // 3)))
+    ax.margins(y=0.08)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     fig.tight_layout()

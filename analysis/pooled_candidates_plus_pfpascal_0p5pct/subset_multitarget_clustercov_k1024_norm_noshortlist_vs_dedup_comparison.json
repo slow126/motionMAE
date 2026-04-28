@@ -1,0 +1,22 @@
+{
+  "noshortlist_count": 14349,
+  "dedup_count": 22495,
+  "overlap_count": 13643,
+  "noshortlist_only_count": 706,
+  "dedup_only_count": 8852,
+  "overlap_source_counts": {
+    "pfpascal": 624,
+    "pointodyssey": 4206,
+    "spair": 8813
+  },
+  "noshortlist_only_source_counts": {
+    "pfpascal": 60,
+    "pointodyssey": 30,
+    "spair": 616
+  },
+  "dedup_only_source_counts": {
+    "pfpascal": 356,
+    "pointodyssey": 4180,
+    "spair": 4316
+  }
+}

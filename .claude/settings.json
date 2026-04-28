@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l /home/spencer/Projects/MotionMAE/dis_proposal/sections/*.tex)",
+      "Bash(pdflatex -interaction=nonstopmode -halt-on-error byuprop-example.tex)",
+      "Bash(bibtex byuprop-example:*)",
+      "Bash(pdflatex -interaction=nonstopmode byuprop-example.tex)",
+      "Bash(latexmk -pdf -interaction=nonstopmode byuprop-example.tex)"
+    ]
+  }
+}

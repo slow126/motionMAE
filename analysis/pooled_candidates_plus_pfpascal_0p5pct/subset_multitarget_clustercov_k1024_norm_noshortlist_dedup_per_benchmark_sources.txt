@@ -1,0 +1,25 @@
+
+kitti2012 (4499 selected):
+  pointodyssey: 2546
+  spair: 1598
+  pfpascal: 355
+
+kitti2015 (4499 selected):
+  pointodyssey: 2376
+  spair: 1924
+  pfpascal: 199
+
+pfpascal (4499 selected):
+  spair: 2413
+  pointodyssey: 1867
+  pfpascal: 219
+
+pfwillow (4499 selected):
+  spair: 3527
+  pointodyssey: 911
+  pfpascal: 61
+
+tss (4499 selected):
+  spair: 3667
+  pointodyssey: 686
+  pfpascal: 146

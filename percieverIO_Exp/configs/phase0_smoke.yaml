@@ -1,0 +1,18 @@
+extends: phase0_rc.yaml
+experiment:
+  name: phase0_smoke
+training:
+  max_epochs: 8
+  max_steps: 32
+  log_every_n_steps: 1
+  num_sanity_val_steps: 0
+  overfit_batches: 1
+  limit_train_batches: 1
+  limit_val_batches: 1
+data:
+  batch_size: 1
+  val_batch_size: 1
+  num_workers: 0
+  persistent_workers: false
+  train_subset_size: 1
+  val_subset_size: 1

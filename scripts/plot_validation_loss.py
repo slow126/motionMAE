@@ -16,6 +16,25 @@ DEFAULT_LINEWIDTH = 1.2
 DEFAULT_MARKERSIZE = 4.0
 DEFAULT_MARKEREDGEWIDTH = 0.8
 
+BENCHMARK_LABELS = {
+    "kitti2012": "KITTI-2012",
+    "kitti2015": "KITTI-2015",
+    "pfpascal": "PF-PASCAL",
+    "pfwillow": "PF-WILLOW",
+    "tss": "TSS",
+}
+
+AXIS_LABELS = {
+    "training_steps": "Training Steps",
+    "epoch": "Epoch",
+}
+
+METRIC_LABELS = {
+    "loss": "Loss",
+    "pck": "PCK",
+    "pck_motion_aware": "Motion-Aware PCK",
+}
+
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -96,7 +115,30 @@ def parse_args() -> argparse.Namespace:
         default="validation_pck_curve.png",
         help="Path to save figure (default: validation_pck_curve.png).",
     )
+    parser.add_argument(
+        "--smooth-window",
+        default=1,
+        type=int,
+        help="Optional trailing rolling-average window for curve plots (default: 1 = no smoothing).",
+    )
+    parser.add_argument(
+        "--hide-markers",
+        action="store_true",
+        help="Hide per-point markers in curve plots.",
+    )
     return parser.parse_args()
+
+
+def pretty_benchmark(bench: str) -> str:
+    return BENCHMARK_LABELS.get(bench, bench)
+
+
+def pretty_axis_label(name: str) -> str:
+    return AXIS_LABELS.get(name, name.replace("_", " ").title())
+
+
+def pretty_metric_label(name: str) -> str:
+    return METRIC_LABELS.get(name, name.replace("_", " ").title())
 
 
 def plot_single(
@@ -121,21 +163,32 @@ def plot_single(
     for idx, (label, series) in enumerate(series_by_run):
         if series.empty:
             continue
+        plot_series = series.sort_values(args.x_axis).copy()
+        smooth_window = max(1, int(getattr(args, "smooth_window", 1)))
+        if smooth_window > 1:
+            plot_series[args.metric] = (
+                plot_series[args.metric]
+                .rolling(window=smooth_window, min_periods=1)
+                .mean()
+            )
+        marker = None if getattr(args, "hide_markers", False) else markers[idx % len(markers)]
         ax.plot(
-            series[args.x_axis],
-            series[args.metric],
-            marker=markers[idx % len(markers)],
+            plot_series[args.x_axis],
+            plot_series[args.metric],
+            marker=marker,
             linestyle=linestyles[idx % len(linestyles)],
             label=label,
-            linewidth=DEFAULT_LINEWIDTH,
+            linewidth=1.8 if getattr(args, "hide_markers", False) else DEFAULT_LINEWIDTH,
             markersize=DEFAULT_MARKERSIZE,
             markeredgewidth=DEFAULT_MARKEREDGEWIDTH,
+            alpha=0.95,
         )
 
-    title = f"{bench} ({suffix})" if suffix else bench
+    pretty_bench = pretty_benchmark(bench)
+    title = f"{pretty_bench} ({suffix})" if suffix else pretty_bench
     ax.set_title(title)
-    ax.set_xlabel(args.x_axis)
-    ax.set_ylabel(args.metric)
+    ax.set_xlabel(pretty_axis_label(args.x_axis))
+    ax.set_ylabel(pretty_metric_label(args.metric))
     ax.grid(alpha=0.3)
     if show_legend:
         ax.legend(fontsize=8)
@@ -308,7 +361,9 @@ def plot_metric_curves(
         flat_axes = list(axes.flatten())
         handles, labels = _first_handles_labels(flat_axes)
         _place_shared_legend(fig, flat_axes, handles, labels)
-        fig.suptitle(f"Validation {args.metric} by benchmark ({args.scope}), no-vs-with step-0")
+        fig.suptitle(
+            f"Validation {pretty_metric_label(args.metric)} by Benchmark ({args.scope}), no-vs-with step-0"
+        )
         fig.tight_layout(rect=[0, 0, 1, 0.96])
         fig.savefig(args.output, dpi=200)
         print(f"Saved plot: {args.output}")
@@ -330,7 +385,7 @@ def plot_metric_curves(
     flat_axes = list(axes)
     handles, labels = _first_handles_labels(flat_axes)
     _place_shared_legend(fig, flat_axes, handles, labels)
-    fig.suptitle(f"Validation {args.metric} by benchmark ({args.scope})")
+    fig.suptitle(f"Validation {pretty_metric_label(args.metric)} by Benchmark ({args.scope})")
     fig.tight_layout(rect=[0, 0, 1, 0.96])
     fig.savefig(args.output, dpi=200)
     print(f"Saved plot: {args.output}")
