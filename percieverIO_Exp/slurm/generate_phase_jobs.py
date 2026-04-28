@@ -30,6 +30,7 @@ def write_job(
 ) -> None:
     slurm_cfg = machine_cfg["slurm"]
     machine = machine_cfg["machine"]
+    project_root = Path(machine["project_root"])
     account = str(slurm_cfg.get("account", "")).strip()
     qos = str(slurm_cfg.get("qos", "")).strip()
     lines = [
@@ -53,20 +54,19 @@ def write_job(
         [
             "",
             "set -euo pipefail",
-            f"cd {machine['project_root']}",
+            f"cd {project_root}",
             f"source ~/.bashrc || true",
             f"conda activate {machine['conda_env']}",
             (
                 "srun "
                 f"{machine.get('python_path', 'python3')} -u "
-                f"{PROJECT_ROOT / 'scripts' / 'train_variable_flow_perceiver.py'} "
-                f"--config {config_path}"
+                f"{project_root / 'scripts' / 'train_variable_flow_perceiver.py'} "
+                f"--config {project_root / 'percieverIO_Exp' / 'configs' / config_path.name}"
             ),
             "",
         ]
     )
     job_path.parent.mkdir(parents=True, exist_ok=True)
-    log_path.parent.mkdir(parents=True, exist_ok=True)
     job_path.write_text("\n".join(lines), encoding="utf-8")
     job_path.chmod(0o755)
 

@@ -1,12 +1,12 @@
 machine:
-  project_root: /home/spencer/Projects/MotionMAE
+  project_root: /home/slow1/Projects/MotionMAE
   python_path: python3
   conda_env: cuda
 
 paths:
-  snapshots_root: /home/spencer/Projects/MotionMAE/snapshots/perceiver_variable_flow
-  slurm_logs_root: /home/spencer/Projects/MotionMAE/slurm_logs/perceiver_variable_flow
-  flyingthings_root: /home/spencer/Data/FlyingThings3D_10k
+  snapshots_root: /home/slow1/Projects/MotionMAE/snapshots/perceiver_variable_flow
+  slurm_logs_root: /home/slow1/Projects/MotionMAE/slurm_logs/perceiver_variable_flow
+  flyingthings_root: /home/slow1/Data/FlyingThings3D_10k
 
 slurm:
   partition: cs
