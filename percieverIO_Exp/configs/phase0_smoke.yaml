@@ -10,6 +10,8 @@ training:
   limit_train_batches: 1
   limit_val_batches: 1
 data:
+  train_split: train
+  val_split: train
   batch_size: 1
   val_batch_size: 1
   num_workers: 0
