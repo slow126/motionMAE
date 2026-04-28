@@ -30,6 +30,7 @@ class VariableObservationFlowDataConfig:
     normalize_rgb: bool = True
     batch_size: int = 4
     val_batch_size: int = 4
+    train_shuffle: bool = True
     num_workers: int = 8
     prefetch_factor: Optional[int] = None
     pin_memory: bool = True
@@ -485,7 +486,12 @@ class VariableObservationFlowDataModule(pl.LightningDataModule):
     def train_dataloader(self) -> DataLoader:
         if self.train_dataset is None:
             raise RuntimeError("train dataset is not initialized")
-        return self._loader(self.train_dataset, int(self.config.batch_size), True, bool(self.config.drop_last))
+        return self._loader(
+            self.train_dataset,
+            int(self.config.batch_size),
+            bool(self.config.train_shuffle),
+            bool(self.config.drop_last),
+        )
 
     def val_dataloader(self) -> DataLoader:
         if self.val_dataset is None:
