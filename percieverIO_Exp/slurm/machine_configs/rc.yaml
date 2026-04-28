@@ -6,7 +6,7 @@ machine:
 paths:
   snapshots_root: /home/slow1/Projects/motionMAE/snapshots/perceiver_variable_flow
   slurm_logs_root: /home/slow1/Projects/motionMAE/slurm_logs/perceiver_variable_flow
-  flyingthings_root: /home/slow1/Data/FlyingThings3D_10k
+  flyingthings_root: /home/slow1/Data/FlyingThings3D_Pytorch
 
 slurm:
   partition: cs
