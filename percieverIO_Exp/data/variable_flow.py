@@ -365,6 +365,7 @@ def build_variable_flow_sample(
 class VariableObservationFlowDataset(Dataset):
     def __init__(self, root: str, split: str, config: VariableObservationFlowDataConfig) -> None:
         super().__init__()
+        self.split = str(split)
         self.dataset = FlyingThings3D(root=root, split=split, pass_name=config.pass_name, camera=config.camera)
         self.config = config
 
@@ -379,7 +380,7 @@ class VariableObservationFlowDataset(Dataset):
         valid = torch.isfinite(flow).all(dim=0)
         flow = torch.nan_to_num(flow, nan=0.0, posinf=0.0, neginf=0.0)
         return build_variable_flow_sample(
-            sample_id=f"{self.dataset.split}:{idx}",
+            sample_id=f"{self.split}:{idx}",
             image1=image1,
             image2=image2,
             flow=flow,
