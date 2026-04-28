@@ -90,7 +90,8 @@ class VariableFlowConfig:
 
 class VariableFlowInputAdapter(InputAdapter):
     def __init__(self, raw_input_channels: int, input_width: int, image_shape: Sequence[int], num_frequency_bands: int):
-        position_encoding = FourierPositionEncoding(tuple(image_shape), num_frequency_bands=num_frequency_bands)
+        self.image_shape = tuple(int(v) for v in image_shape)
+        position_encoding = FourierPositionEncoding(self.image_shape, num_frequency_bands=num_frequency_bands)
         pos_channels = position_encoding.num_position_encoding_channels(include_positions=False)
         super().__init__(input_width + pos_channels)
         self.position_encoding = position_encoding
@@ -98,14 +99,19 @@ class VariableFlowInputAdapter(InputAdapter):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         xy = x[..., 2:4]
-        pos = self.position_encoding._position_encodings(xy, include_positions=False)
+        pos = self.position_encoding._position_encodings(
+            xy,
+            max_frequencies=self.image_shape,
+            include_positions=False,
+        )
         return torch.cat([self.linear(x), pos], dim=-1)
 
 
 class VariableFlowQueryProvider(nn.Module, QueryProvider):
     def __init__(self, raw_query_channels: int, query_width: int, image_shape: Sequence[int], num_frequency_bands: int):
         super().__init__()
-        self.position_encoding = FourierPositionEncoding(tuple(image_shape), num_frequency_bands=num_frequency_bands)
+        self.image_shape = tuple(int(v) for v in image_shape)
+        self.position_encoding = FourierPositionEncoding(self.image_shape, num_frequency_bands=num_frequency_bands)
         self.linear = nn.Linear(raw_query_channels, query_width)
         self._num_query_channels = query_width + self.position_encoding.num_position_encoding_channels(
             include_positions=False
@@ -117,7 +123,11 @@ class VariableFlowQueryProvider(nn.Module, QueryProvider):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         xy = x[..., :2]
-        pos = self.position_encoding._position_encodings(xy, include_positions=False)
+        pos = self.position_encoding._position_encodings(
+            xy,
+            max_frequencies=self.image_shape,
+            include_positions=False,
+        )
         return torch.cat([self.linear(x), pos], dim=-1)
 
 
