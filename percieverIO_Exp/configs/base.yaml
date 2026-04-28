@@ -73,8 +73,8 @@ analysis:
   mask_type: random
 
 paths:
-  snapshots: /home/slow1/Projects/MotionMAE/snapshots/perceiver_variable_flow
-  slurm_logs: /home/slow1/Projects/MotionMAE/slurm_logs/perceiver_variable_flow
+  snapshots: /home/slow1/Projects/motionMAE/snapshots/perceiver_variable_flow
+  slurm_logs: /home/slow1/Projects/motionMAE/slurm_logs/perceiver_variable_flow
 
 slurm:
   machine: rc
