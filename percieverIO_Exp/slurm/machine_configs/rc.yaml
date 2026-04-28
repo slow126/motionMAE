@@ -11,7 +11,7 @@ paths:
 slurm:
   partition: cs
   account: ""
-  qos: ""
+  qos: cs
   nodes: 1
   ntasks: 1
   cpus_per_task: 16
