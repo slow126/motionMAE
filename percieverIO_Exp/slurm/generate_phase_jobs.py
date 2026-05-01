@@ -80,7 +80,8 @@ def main() -> None:
 
     machine_cfg = load_yaml(Path(args.machine_config).resolve())
     phases = [args.phase] if args.phase else [f"phase{i}" for i in range(5)]
-    logs_root = Path(machine_cfg["paths"]["slurm_logs_root"])
+    snapshots_root = Path(machine_cfg["paths"]["snapshots_root"])
+    logs_root = snapshots_root / "_slurm"
     jobs_root = SLURM_ROOT / "jobs" / args.mode
     walltime = str(machine_cfg["slurm"]["time_full" if args.mode == "full" else "time_smoke"])
 
@@ -89,7 +90,7 @@ def main() -> None:
         config_name = f"{phase}_{'rc' if args.mode == 'full' else 'smoke'}.yaml"
         config_path = CONFIG_ROOT / config_name
         job_name = f"vf_{phase}_{args.mode}"
-        log_path = logs_root / args.mode / f"{job_name}.log"
+        log_path = logs_root / args.mode / f"{job_name}-%j.log"
         job_path = jobs_root / f"{job_name}.sbatch"
         write_job(
             job_path=job_path,

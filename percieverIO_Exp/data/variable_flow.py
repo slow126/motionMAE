@@ -11,6 +11,8 @@ from torch.utils.data import DataLoader, Dataset, Subset
 from torchvision.datasets import FlyingThings3D
 from torchvision.transforms.functional import normalize
 
+from src.flow_smoke.dataset import PointOdysseyFlowSmokeDataset, load_manifest, split_manifest_indices_by_clip
+
 
 IMAGENET_MEAN = (0.485, 0.456, 0.406)
 IMAGENET_STD = (0.229, 0.224, 0.225)
@@ -20,6 +22,7 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 class VariableObservationFlowDataConfig:
     root: str
     phase: int
+    dataset_name: str = "flyingthings"
     train_split: str = "train"
     val_split: str = "test"
     pass_name: str = "clean"
@@ -49,6 +52,15 @@ class VariableObservationFlowDataConfig:
     smoke_overfit_batches: Optional[int] = None
     fixed_observed_fraction: Optional[float] = None
     fixed_mask_mode: Optional[str] = None
+    pointodyssey_manifest_path: Optional[str] = None
+    pointodyssey_root: Optional[str] = None
+    pointodyssey_val_fraction: float = 0.1
+    pointodyssey_split_seed: int = 2021
+    pointodyssey_dt_values: Optional[Sequence[int]] = None
+    pointodyssey_max_points_per_pair: Optional[int] = None
+    pointodyssey_max_displacement: Optional[float] = None
+    pointodyssey_trust_manifest: bool = False
+    pointodyssey_min_valid_points: int = 0
 
 
 def _resize_rgb(image: torch.Tensor, image_size: tuple[int, int]) -> torch.Tensor:
@@ -391,6 +403,49 @@ class VariableObservationFlowDataset(Dataset):
         )
 
 
+class VariableObservationPointOdysseyDataset(Dataset):
+    def __init__(
+        self,
+        manifest_path: str,
+        pointodyssey_root: str,
+        indices: Sequence[int],
+        config: VariableObservationFlowDataConfig,
+        split_name: str,
+    ) -> None:
+        super().__init__()
+        self.split = str(split_name)
+        self.config = config
+        self.dataset = PointOdysseyFlowSmokeDataset(
+            manifest_path=manifest_path,
+            indices=indices,
+            dt_values=config.pointodyssey_dt_values,
+            pointodyssey_root=pointodyssey_root,
+            reverse_flow=False,
+            size=tuple(int(v) for v in config.image_size),
+            max_points_per_pair=config.pointodyssey_max_points_per_pair,
+            max_displacement=config.pointodyssey_max_displacement,
+            trust_manifest=bool(config.pointodyssey_trust_manifest),
+            min_valid_points=int(config.pointodyssey_min_valid_points),
+            normalize_flow=False,
+            seed=int(config.random_seed),
+        )
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, idx: int) -> dict[str, Any]:
+        item = self.dataset[idx]
+        return build_variable_flow_sample(
+            sample_id=f"{self.split}:{int(item['manifest_idx'])}",
+            image1=item["src_img"],
+            image2=item["trg_img"],
+            flow=item["flow"] * float(item["flow_scale"]),
+            valid=item["valid_flow_mask"],
+            config=self.config,
+            rng_seed=int(self.config.random_seed) + int(item["manifest_idx"]),
+        )
+
+
 def _pad_view_tokens(view_items: list[Optional[dict[str, Any]]]) -> dict[str, Any]:
     template = next((item for item in view_items if item is not None), None)
     if template is None:
@@ -457,8 +512,38 @@ class VariableObservationFlowDataModule(pl.LightningDataModule):
     def setup(self, stage: Optional[str] = None) -> None:
         if stage not in (None, "fit", "validate"):
             return
-        train_dataset: Dataset = VariableObservationFlowDataset(self.config.root, self.config.train_split, self.config)
-        val_dataset: Dataset = VariableObservationFlowDataset(self.config.root, self.config.val_split, self.config)
+        dataset_name = str(self.config.dataset_name).lower()
+        if dataset_name == "flyingthings":
+            train_dataset = VariableObservationFlowDataset(self.config.root, self.config.train_split, self.config)
+            val_dataset = VariableObservationFlowDataset(self.config.root, self.config.val_split, self.config)
+        elif dataset_name == "pointodyssey":
+            if not self.config.pointodyssey_manifest_path or not self.config.pointodyssey_root:
+                raise ValueError("PointOdyssey config requires pointodyssey_manifest_path and pointodyssey_root.")
+            all_entries = load_manifest(self.config.pointodyssey_manifest_path)
+            all_indices = list(range(len(all_entries)))
+            train_indices, val_indices = split_manifest_indices_by_clip(
+                [all_entries[i] for i in all_indices],
+                val_fraction=float(self.config.pointodyssey_val_fraction),
+                seed=int(self.config.pointodyssey_split_seed),
+            )
+            if self.config.train_split == self.config.val_split:
+                train_indices = val_indices = train_indices
+            train_dataset = VariableObservationPointOdysseyDataset(
+                manifest_path=self.config.pointodyssey_manifest_path,
+                pointodyssey_root=self.config.pointodyssey_root,
+                indices=train_indices,
+                config=self.config,
+                split_name=self.config.train_split,
+            )
+            val_dataset = VariableObservationPointOdysseyDataset(
+                manifest_path=self.config.pointodyssey_manifest_path,
+                pointodyssey_root=self.config.pointodyssey_root,
+                indices=val_indices if val_indices else train_indices,
+                config=self.config,
+                split_name=self.config.val_split,
+            )
+        else:
+            raise ValueError(f"Unsupported dataset_name={self.config.dataset_name}")
         if self.config.train_subset_size is not None:
             train_dataset = Subset(train_dataset, list(range(min(len(train_dataset), int(self.config.train_subset_size)))))
         if self.config.val_subset_size is not None:

@@ -1,0 +1,28 @@
+extends: phase2_flyingthings_local.yaml
+experiment:
+  name: phase2_flyingthings_local_smoke
+
+training:
+  max_epochs: 10000
+  max_steps: 10000
+  precision: 32-true
+  lr: 3.0e-5
+  gradient_clip_val: 0.5
+  log_every_n_steps: 1
+  num_sanity_val_steps: 0
+  limit_train_batches: 1
+  limit_val_batches: 1
+  val_check_interval: 25
+  tb_log_images: 4
+  overfit_batches: 0.0
+
+data:
+  train_split: train
+  val_split: train
+  batch_size: 8
+  val_batch_size: 8
+  train_shuffle: false
+  num_workers: 0
+  persistent_workers: false
+  train_subset_size: 8
+  val_subset_size: 8

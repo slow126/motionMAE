@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=vf_phase0_full
-#SBATCH --output=/home/spencer/Projects/MotionMAE/slurm_logs/perceiver_variable_flow/full/vf_phase0_full.log
-#SBATCH --error=/home/spencer/Projects/MotionMAE/slurm_logs/perceiver_variable_flow/full/vf_phase0_full.log
+#SBATCH --output=/home/slow1/Projects/motionMAE/snapshots/perceiver_variable_flow/_slurm/full/vf_phase0_full-%j.log
+#SBATCH --error=/home/slow1/Projects/motionMAE/snapshots/perceiver_variable_flow/_slurm/full/vf_phase0_full-%j.log
 #SBATCH --partition=cs
 #SBATCH --time=23:59:00
 #SBATCH --nodes=1
@@ -9,9 +9,10 @@
 #SBATCH --cpus-per-task=16
 #SBATCH --gres=gpu:1
 #SBATCH --mem=64g
+#SBATCH --qos=cs
 
 set -euo pipefail
-cd /home/spencer/Projects/MotionMAE
+cd /home/slow1/Projects/motionMAE
 source ~/.bashrc || true
 conda activate cuda
-srun python3 -u /home/spencer/Projects/MotionMAE/scripts/train_variable_flow_perceiver.py --config /home/spencer/Projects/MotionMAE/percieverIO_Exp/configs/phase0_rc.yaml
+srun python3 -u /home/slow1/Projects/motionMAE/scripts/train_variable_flow_perceiver.py --config /home/slow1/Projects/motionMAE/percieverIO_Exp/configs/phase0_rc.yaml
